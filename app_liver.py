@@ -9,7 +9,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
-app.secret_key = 'poibox_v24_listener_management'
+app.secret_key = 'poibox_v25_point_system'
 
 # --- データベース設定 ---
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -23,7 +23,7 @@ def get_db_conn():
 def init_db():
     conn = get_db_conn()
     try:
-        # admins: ライバーのログイン情報
+        # admins: ライバーログイン用
         conn.execute('''
             CREATE TABLE IF NOT EXISTS admins (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -31,14 +31,14 @@ def init_db():
                 password TEXT NOT NULL
             )
         ''')
-        # messages: リスナーからのメッセージ
+        # listeners: 疑似リスナー管理（ポイント含む）
         conn.execute('''
-            CREATE TABLE IF NOT EXISTS messages (
+            CREATE TABLE IF NOT EXISTS listeners (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                liver TEXT NOT NULL,
-                sender TEXT NOT NULL,
-                content TEXT NOT NULL,
-                timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+                liver_owner TEXT NOT NULL,
+                name TEXT NOT NULL,
+                points INTEGER DEFAULT 0,
+                UNIQUE(liver_owner, name)
             )
         ''')
         conn.commit()
@@ -49,81 +49,100 @@ def init_db():
 
 init_db()
 
-# --- ルート設定 ---
-
+# ==========================================
+# 1. トップページ
+# ==========================================
 @app.route('/')
 def index():
     return render_template('index.html')
 
-# リスナー用ページ (URL: /username/welcome.com)
-@app.route('/<username>/welcome.com', methods=['GET', 'POST'])
-def welcome(username):
+# ==========================================
+# 2. リスナー専用ページ (welcome.html)
+# ==========================================
+@app.route('/<liver_name>/<listener_name>/welcome.com')
+def welcome(liver_name, listener_name):
     conn = get_db_conn()
-    if request.method == 'POST':
-        sender = request.form.get('sender', '匿名リスナー')
-        content = request.form.get('content')
-        if content:
-            conn.execute('INSERT INTO messages (liver, sender, content) VALUES (?, ?, ?)', (username, sender, content))
-            conn.commit()
-    messages = conn.execute('SELECT * FROM messages WHERE liver = ? ORDER BY id DESC LIMIT 10', (username,)).fetchall()
+    # リスナー情報を取得
+    listener = conn.execute(
+        'SELECT * FROM listeners WHERE liver_owner = ? AND name = ?', 
+        (liver_name, listener_name)
+    ).fetchone()
     conn.close()
-    return render_template('welcome.html', liver_name=username, messages=messages)
+    
+    if not listener:
+        return "リスナーが見つかりません。管理画面で作成してください。", 404
+        
+    return render_template('welcome.html', liver_name=liver_name, listener=listener)
 
-# ログイン
+# ==========================================
+# 3. ライバーログイン・新規登録
+# ==========================================
 @app.route('/login', methods=['GET', 'POST'])
 def login():
     if request.method == 'POST':
-        user = request.form.get('username')
-        pwd = request.form.get('password')
+        user, pwd = request.form.get('username'), request.form.get('password')
         conn = get_db_conn()
-        admin_data = conn.execute('SELECT * FROM admins WHERE username = ?', (user,)).fetchone()
+        admin = conn.execute('SELECT * FROM admins WHERE username = ?', (user,)).fetchone()
         conn.close()
-        if admin_data and check_password_hash(admin_data['password'], pwd):
+        if admin and check_password_hash(admin['password'], pwd):
             session['user_id'] = user
             return redirect(url_for('admin'))
         flash('ログイン失敗')
     return render_template('login.html')
 
-# --- 【メイン】管理画面：リスナー一覧を表示 ---
-@app.route('/admin')
-def admin():
-    if 'user_id' not in session:
-        return redirect(url_for('login'))
-    
-    username = session['user_id']
-    conn = get_db_conn()
-    
-    # 1. これまでメッセージを送ってくれたリスナーを重複なしで取得（リスト作成）
-    listeners = conn.execute(
-        'SELECT DISTINCT sender FROM messages WHERE liver = ? ORDER BY sender ASC', 
-        (username,)
-    ).fetchall()
-    
-    # 2. 全メッセージ取得
-    messages = conn.execute(
-        'SELECT * FROM messages WHERE liver = ? ORDER BY id DESC', 
-        (username,)
-    ).fetchall()
-    
-    conn.close()
-    share_url = f"{request.host_url}{username}/welcome.com"
-    
-    return render_template('admin.html', username=username, share_url=share_url, messages=messages, listeners=listeners)
-
-# 新規登録
 @app.route('/signup', methods=['GET', 'POST'])
 def signup():
     if request.method == 'POST':
         user, pwd = request.form.get('username'), request.form.get('password')
         if user and pwd:
             hashed = generate_password_hash(pwd)
-            with get_db_conn() as conn:
-                try:
-                    conn.execute('INSERT INTO admins (username, password) VALUES (?, ?)', (user, hashed))
-                    conn.commit()
-                    return redirect(url_for('login'))
-                except: flash('登録済み')
+            conn = get_db_conn()
+            try:
+                conn.execute('INSERT INTO admins (username, password) VALUES (?, ?)', (user, hashed))
+                conn.commit()
+                return redirect(url_for('login'))
+            except: flash('登録済みです')
+            finally: conn.close()
     return render_template('signup.html')
+
+# ==========================================
+# 4. 管理画面 (admin) - 疑似リスナー作成とポイント操作
+# ==========================================
+@app.route('/admin', methods=['GET', 'POST'])
+def admin():
+    if 'user_id' not in session:
+        return redirect(url_for('login'))
+    
+    username = session['user_id']
+    conn = get_db_conn()
+
+    if request.method == 'POST':
+        action = request.form.get('action')
+        
+        # 疑似リスナー作成
+        if action == 'create':
+            name = request.form.get('name')
+            pts = request.form.get('points', 0)
+            try:
+                conn.execute('INSERT INTO listeners (liver_owner, name, points) VALUES (?, ?, ?)', 
+                             (username, name, pts))
+                conn.commit()
+                flash(f'リスナー「{name}」を作成しました')
+            except: flash('その名前は既に存在します')
+            
+        # ポイント増減
+        elif action == 'update_points':
+            l_id = request.form.get('listener_id')
+            diff = int(request.form.get('diff', 0))
+            conn.execute('UPDATE listeners SET points = points + ? WHERE id = ? AND liver_owner = ?', 
+                         (diff, l_id, username))
+            conn.commit()
+
+    # リスナー一覧を取得
+    listeners = conn.execute('SELECT * FROM listeners WHERE liver_owner = ? ORDER BY name ASC', (username,)).fetchall()
+    conn.close()
+    
+    return render_template('admin.html', username=username, listeners=listeners)
 
 @app.route('/logout')
 def logout():
