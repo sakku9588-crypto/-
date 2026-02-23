@@ -4,12 +4,11 @@ import logging
 from flask import Flask, render_template, request, redirect, url_for, session, flash
 from werkzeug.security import generate_password_hash, check_password_hash
 
-# ログ設定
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
-app.secret_key = 'poibox_v40_fix_404'
+app.secret_key = 'poibox_v41_final_integration'
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.path.join(BASE_DIR, 'test_pts.db')
@@ -33,14 +32,17 @@ def init_db():
 
 init_db()
 
-# --- ルート ---
-
-@app.route('/')
+# --- 1. インデックス（入り口） ---
+@app.route('/', methods=['GET', 'POST'])
 def index():
-    # 誰のページでもないトップは管理者のログインへ誘導
-    return redirect(url_for('login'))
+    if request.method == 'POST':
+        liver_name = request.form.get('liver_name')
+        if liver_name:
+            # 入力されたライバーのwelcomeページへ移動
+            return redirect(url_for('welcome', liver_name=liver_name))
+    return render_template('index.html')
 
-# --- 通帳マイページ ---
+# --- 2. 通帳マイページ (welcome) ---
 @app.route('/<liver_name>/welcome', methods=['GET', 'POST'])
 def welcome(liver_name):
     listener_data = None
@@ -62,17 +64,15 @@ def welcome(liver_name):
 
     return render_template('welcome.html', liver_name=liver_name, listener=listener_data)
 
-# --- 掲示板 ---
+# --- 3. 掲示板 (board.com) ---
 @app.route('/<liver_name>/board.com', methods=['GET', 'POST'])
 def board(liver_name):
     logged_in_name = session.get(f'active_listener_{liver_name}')
     conn = get_db_conn()
-    
     if request.method == 'POST':
         action = request.form.get('action')
         sender = logged_in_name if logged_in_name else request.form.get('sender', '').strip()
 
-        # 登録者チェック
         listener = conn.execute('SELECT * FROM listeners WHERE liver_owner = ? AND name = ?', (liver_name, sender)).fetchone()
         if not listener:
             flash('登録されている名前で書き込んでね！')
@@ -96,10 +96,9 @@ def board(liver_name):
     conn.close()
     main_posts = [m for m in messages if m['parent_id'] is None]
     replies = [m for m in messages if m['parent_id'] is not None]
-    
     return render_template('board.html', liver_name=liver_name, main_posts=main_posts, replies=replies, logged_in_name=logged_in_name)
 
-# --- 管理系 ---
+# --- 4. 管理者系ルート（login, signup, admin, logout） ---
 @app.route('/login', methods=['GET', 'POST'])
 def login():
     if request.method == 'POST':
