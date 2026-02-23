@@ -4,8 +4,8 @@ from flask import Flask, render_template, request, redirect, url_for, session, f
 from werkzeug.security import generate_password_hash, check_password_hash
 
 app = Flask(__name__)
-# セッションを確実に維持・破棄するための固定キー
-app.secret_key = 'poibox_absolute_fix_key_999'
+# セッションの安定性のための秘密鍵
+app.secret_key = 'poibox_v54_stable_fix'
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.path.join(BASE_DIR, 'test_pts.db')
@@ -16,7 +16,6 @@ def get_db_conn():
     conn.execute('PRAGMA journal_mode=WAL;') 
     return conn
 
-# 起動時にDBを最新状態に強制アップデート
 def init_db():
     conn = get_db_conn()
     conn.execute('CREATE TABLE IF NOT EXISTS admins (id INTEGER PRIMARY KEY AUTOINCREMENT, username TEXT UNIQUE, password TEXT)')
@@ -30,7 +29,7 @@ def init_db():
 
 init_db()
 
-# --- 1. トップページ ---
+# --- 1. インデックス ---
 @app.route('/', methods=['GET', 'POST'])
 def index():
     if request.method == 'POST':
@@ -39,21 +38,16 @@ def index():
             return redirect(url_for('welcome', liver_name=liver_name))
     return render_template('index.html')
 
-# --- 2. 通帳ページ (ログイン & 表示) ---
+# --- 2. 通帳ページ (mypage.html のデザインを適用) ---
 @app.route('/<liver_name>/welcome', methods=['GET', 'POST'])
 def welcome(liver_name):
-    # 退出処理（通帳を閉じる）の実装
-    if request.args.get('action') == 'close':
-        session.pop(f'user_{liver_name}', None)
-        return redirect(url_for('index'))
-
     lname = None
     if request.method == 'POST':
         lname = request.form.get('listener_name')
         if lname:
-            session[f'user_{liver_name}'] = lname # セッション保存
+            session[f'active_user_{liver_name}'] = lname
     else:
-        lname = session.get(f'user_{liver_name}') # 復元
+        lname = session.get(f'active_user_{liver_name}')
 
     listener_data = None
     if lname:
@@ -62,12 +56,23 @@ def welcome(liver_name):
                                      (liver_name, lname)).fetchone()
         conn.close()
 
-    return render_template('welcome.html', liver_name=liver_name, listener=listener_data)
+    # mypage.html に必要な変数を渡す
+    if listener_data:
+        return render_template('mypage.html', 
+                               liver_name=liver_name,
+                               user_handle=listener_data['name'],
+                               user_points=listener_data['points'],
+                               total_points=listener_data['total_points'],
+                               is_verified=True, # デザイン上の公式マーク
+                               history=[]) # 履歴機能は今回空リスト
+    
+    # ログインしていない場合はログイン画面（welcome.html または index.html）へ
+    return render_template('welcome.html', liver_name=liver_name, listener=None)
 
-# --- 3. 掲示板 (修正版：contentカラムへの保存を徹底) ---
+# --- 3. 掲示板 (board.html 連携) ---
 @app.route('/<liver_name>/board.com', methods=['GET', 'POST'])
 def board(liver_name):
-    logged_in_name = session.get(f'user_{liver_name}')
+    logged_in_name = session.get(f'active_user_{liver_name}')
     conn = get_db_conn()
     
     if request.method == 'POST':
@@ -85,30 +90,32 @@ def board(liver_name):
             msg_id = request.form.get('message_id')
             conn.execute('UPDATE messages SET likes = likes + 1 WHERE id = ?', (msg_id,))
         else:
-            # HTML側の name="message" を受け取る
-            text_content = request.form.get('message')
+            # アップロードされた board.html の name="message" と一致させる
+            content = request.form.get('message')
             parent_id = request.form.get('parent_id')
-            if text_content:
+            if content:
                 conn.execute('INSERT INTO messages (liver, sender, content, parent_id) VALUES (?, ?, ?, ?)', 
-                             (liver_name, sender, text_content, parent_id if parent_id else None))
-        
+                             (liver_name, sender, content, parent_id if parent_id else None))
         conn.commit()
         conn.close()
         return redirect(url_for('board', liver_name=liver_name))
 
-    # 表示処理
     messages = conn.execute('SELECT * FROM messages WHERE liver = ? ORDER BY id ASC', (liver_name,)).fetchall()
     conn.close()
     
     main_posts = [m for m in messages if m['parent_id'] is None]
     replies = [m for m in messages if m['parent_id'] is not None]
     
-    return render_template('board.html', liver_name=liver_name, main_posts=main_posts, replies=replies, logged_in_name=logged_in_name)
+    return render_template('board.html', 
+                           liver_name=liver_name, 
+                           main_posts=main_posts, 
+                           replies=replies, 
+                           logged_in_name=logged_in_name)
 
-# --- 4. ログアウト ---
+# --- 4. ログアウト (通帳を閉じる) ---
 @app.route('/logout')
 def logout():
-    session.clear()
+    session.clear() # サーバー側の全記憶を消去
     return redirect(url_for('index'))
 
 # --- 管理画面系 ---
