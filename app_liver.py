@@ -9,21 +9,19 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
-# セッションの維持に必要なキー
-app.secret_key = 'poibox_v53_perfect_final'
+# 重要：セッションを維持するためにキーを固定します
+app.secret_key = 'poibox_ultimate_stable_v100'
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.path.join(BASE_DIR, 'test_pts.db')
 
 def get_db_conn():
-    """データベース接続（WALモードで安定化）"""
     conn = sqlite3.connect(DB_PATH, check_same_thread=False, timeout=30)
     conn.row_factory = sqlite3.Row
     conn.execute('PRAGMA journal_mode=WAL;') 
     return conn
 
 def init_db():
-    """テーブル初期化"""
     conn = get_db_conn()
     conn.execute('CREATE TABLE IF NOT EXISTS admins (id INTEGER PRIMARY KEY AUTOINCREMENT, username TEXT UNIQUE, password TEXT)')
     conn.execute('CREATE TABLE IF NOT EXISTS listeners (id INTEGER PRIMARY KEY AUTOINCREMENT, liver_owner TEXT, name TEXT, points INTEGER DEFAULT 0, total_points INTEGER DEFAULT 0, UNIQUE(liver_owner, name))')
@@ -36,7 +34,7 @@ def init_db():
 
 init_db()
 
-# --- 1. トップページ (入り口) ---
+# --- 1. トップページ (検索) ---
 @app.route('/', methods=['GET', 'POST'])
 def index():
     if request.method == 'POST':
@@ -45,21 +43,17 @@ def index():
             return redirect(url_for('welcome', liver_name=liver_name))
     return render_template('index.html')
 
-# --- 2. 通帳マイページ (戻り先) ---
+# --- 2. 通帳マイページ (ログイン・データ表示) ---
 @app.route('/<liver_name>/welcome', methods=['GET', 'POST'])
 def welcome(liver_name):
-    # 名前を特定するための変数
     lname = None
-    
-    # 直接入力（ログイン時）
     if request.method == 'POST':
         lname = request.form.get('listener_name')
         if lname:
-            session[f'active_listener_{liver_name}'] = lname # 名前を記憶
-    
-    # 掲示板から戻ってきた時（セッションから復元）
-    if not lname:
-        lname = session.get(f'active_listener_{liver_name}')
+            session[f'active_user_{liver_name}'] = lname # セッションに保存
+    else:
+        # 掲示板から戻った際などにセッションから名前を復元
+        lname = session.get(f'active_user_{liver_name}')
 
     listener_data = None
     if lname:
@@ -72,16 +66,16 @@ def welcome(liver_name):
 
     return render_template('welcome.html', liver_name=liver_name, listener=listener_data)
 
-# --- 3. 掲示板 (board.com) ---
+# --- 3. 掲示板 (バグ修正版) ---
 @app.route('/<liver_name>/board.com', methods=['GET', 'POST'])
 def board(liver_name):
     # ログイン中の名前を取得
-    logged_in_name = session.get(f'active_listener_{liver_name}')
+    logged_in_name = session.get(f'active_user_{liver_name}')
     conn = get_db_conn()
     
     if request.method == 'POST':
         action = request.form.get('action')
-        # ログイン済みならその名前、未ログインならフォームのsenderを使用
+        # ログイン済みならその名前、そうでなければフォームの sender (HTMLにある場合)
         sender = logged_in_name if logged_in_name else request.form.get('sender', '').strip()
 
         # 登録者チェック
@@ -89,7 +83,7 @@ def board(liver_name):
                                 (liver_name, sender)).fetchone()
         
         if not listener:
-            flash('通帳に登録されている名前で書き込んでね！')
+            flash('通帳でログインしてから書き込んでね！')
             conn.close()
             return redirect(url_for('board', liver_name=liver_name))
 
@@ -97,7 +91,7 @@ def board(liver_name):
             msg_id = request.form.get('message_id')
             conn.execute('UPDATE messages SET likes = likes + 1 WHERE id = ?', (msg_id,))
         else:
-            # HTML側の name="message" に合わせる
+            # HTML側の <input name="message"> から取得
             content = request.form.get('message')
             parent_id = request.form.get('parent_id')
             if content:
@@ -108,7 +102,7 @@ def board(liver_name):
         conn.close()
         return redirect(url_for('board', liver_name=liver_name))
 
-    # 投稿一覧の取得（HTML側の変数 main_posts, replies に合わせる）
+    # 投稿一覧
     messages = conn.execute('SELECT * FROM messages WHERE liver = ? ORDER BY id ASC', (liver_name,)).fetchall()
     conn.close()
     
@@ -121,7 +115,13 @@ def board(liver_name):
                            replies=replies, 
                            logged_in_name=logged_in_name)
 
-# --- 4. 管理者・ログアウト ---
+# --- 4. ログアウト (close対応) ---
+@app.route('/logout')
+def logout():
+    session.clear() # 全てのセッションを削除
+    return redirect(url_for('index')) # 完全にトップに戻す
+
+# --- 管理画面系 ---
 @app.route('/login', methods=['GET', 'POST'])
 def login():
     if request.method == 'POST':
@@ -130,14 +130,14 @@ def login():
         admin = conn.execute('SELECT * FROM admins WHERE username = ?', (user,)).fetchone()
         conn.close()
         if admin and check_password_hash(admin['password'], pwd):
-            session['user_id'] = user
+            session['admin_user'] = user
             return redirect(url_for('admin'))
     return render_template('login.html')
 
 @app.route('/admin', methods=['GET', 'POST'])
 def admin():
-    if 'user_id' not in session: return redirect(url_for('login'))
-    username = session['user_id']
+    if 'admin_user' not in session: return redirect(url_for('login'))
+    username = session['admin_user']
     conn = get_db_conn()
     if request.method == 'POST':
         action = request.form.get('action')
@@ -172,11 +172,6 @@ def signup():
             except: pass
             finally: conn.close()
     return render_template('signup.html')
-
-@app.route('/logout')
-def logout():
-    session.clear()
-    return redirect(url_for('index'))
 
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 5000))
