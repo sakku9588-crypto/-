@@ -2,20 +2,28 @@
 <html lang="ja">
 <head>
     <meta charset="UTF-8">
-    <title>Poiboxへようこそ</title>
+    <title>Poibox - 入り口</title>
     <style>
-        body { text-align: center; font-family: sans-serif; padding-top: 50px; }
-        .btn { display: inline-block; padding: 15px 30px; margin: 10px; font-size: 20px; color: white; text-decoration: none; border-radius: 5px; }
-        .btn-liver { background-color: #ff4757; }
-        .btn-listener { background-color: #2ed573; }
+        /* 以前のスタイルをここに反映させてください */
+        body { text-align: center; font-family: "Helvetica Neue", Arial, sans-serif; background-color: #f0f2f5; padding-top: 100px; }
+        .container { background: white; padding: 40px; border-radius: 20px; display: inline-block; shadow: 0 4px 15px rgba(0,0,0,0.1); }
+        h1 { color: #333; }
+        input[type="text"] { padding: 10px; width: 250px; border: 1px solid #ddd; border-radius: 5px; margin-bottom: 20px; }
+        .btn { background-color: #007bff; color: white; padding: 10px 20px; border: none; border-radius: 5px; cursor: pointer; text-decoration: none; }
+        .admin-link { margin-top: 30px; display: block; color: #888; font-size: 0.8em; }
     </style>
 </head>
 <body>
-    <h1>Poibox</h1>
-    <p>あなたはどちらですか？</p>
-    
-    <a href="/login" class="btn btn-liver">ライバーの方</a>
-    
-    <a href="/welcome" class="btn btn-listener">リスナーの方</a>
+    <div class="container">
+        <h1>Poibox</h1>
+        <p>ライバーの名前を入力してください</p>
+        
+        <form action="/welcome" method="get">
+            <input type="text" name="u" placeholder="ライバー名を入力" required><br>
+            <button type="submit" class="btn">掲示板を見に行く</button>
+        </form>
+
+        <a href="/login" class="admin-link">ライバーの方はこちら（管理画面）</a>
+    </div>
 </body>
 </html>
