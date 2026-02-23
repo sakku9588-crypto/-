@@ -4,54 +4,49 @@ import logging
 from flask import Flask, render_template, request, redirect, url_for, session, flash
 from werkzeug.security import generate_password_hash, check_password_hash
 
-# --- ログ設定 ---
+# --- 設定 ---
 logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
-
 app = Flask(__name__)
-app.secret_key = 'poibox_admin_secret_fixed'
+app.secret_key = 'poibox_system_secret_v5'
 
-# --- データベースの保存場所設定 (Render対策) ---
-# データベースは /tmp/ に保存（再起動でリセットされるが、まずは動かすことを優先）
+# Renderの保存先設定
 MASTER_DB = '/tmp/master_admin.db'
+# あなたの「掲示板」の実際のRender URLに書き換えてください
+BOARD_URL = "https://your-board-service.onrender.com"
 
 def get_master_conn():
     conn = sqlite3.connect(MASTER_DB)
     conn.row_factory = sqlite3.Row
     return conn
 
-def init_master_db():
+def init_db():
     conn = get_master_conn()
-    conn.execute('''
-        CREATE TABLE IF NOT EXISTS admins (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            username TEXT UNIQUE NOT NULL,
-            password TEXT NOT NULL
-        )
-    ''')
+    conn.execute('''CREATE TABLE IF NOT EXISTS admins 
+                    (id INTEGER PRIMARY KEY AUTOINCREMENT, username TEXT UNIQUE, password TEXT)''')
     conn.commit()
     conn.close()
 
-# 起動時にDBを初期化
-init_master_db()
+init_db()
 
-# --- ここにあなたの「掲示板」のURLを貼ってください ---
-# 例: "https://poibox-board.onrender.com"
-BOARD_URL = "あなたの掲示板URLに書き換えてね"
-
+# ==========================================
+# 1. 共通の入り口 (ライバーかリスナーか選択)
+# ==========================================
 @app.route('/')
 def index():
-    if 'user_id' not in session:
-        return redirect(url_for('login'))
-    
-    username = session['user_id']
-    # 掲示板へのリンク（ユーザーIDを付けて配布用にする）
-    share_url = f"{BOARD_URL}/?u={username}"
-    
-    # Renderでは管理画面用のHTML (admin_main.htmlなど) が必要です
-    # とりあえず index.html を使う設定にしています
-    return render_template('index.html', username=username, share_url=share_url)
+    # 最初に templates/index.html を表示する
+    return render_template('index.html')
 
+# ==========================================
+# 2. リスナー用ルート
+# ==========================================
+@app.route('/welcome')
+def welcome():
+    # リスナー向けの説明画面を表示
+    return render_template('welcome.html')
+
+# ==========================================
+# 3. ライバー用ルート (管理画面ログイン)
+# ==========================================
 @app.route('/login', methods=['GET', 'POST'])
 def login():
     if request.method == 'POST':
@@ -60,19 +55,24 @@ def login():
         conn = get_master_conn()
         admin = conn.execute('SELECT * FROM admins WHERE username = ?', (user,)).fetchone()
         conn.close()
-        
         if admin and check_password_hash(admin['password'], pwd):
             session['user_id'] = user
-            return redirect(url_for('index'))
-        else:
-            flash('ユーザー名かパスワードが違います')
+            return redirect(url_for('admin_panel'))
+        flash('ログイン失敗')
     return render_template('login.html')
+
+@app.route('/admin_panel')
+def admin_panel():
+    if 'user_id' not in session:
+        return redirect(url_for('login'))
+    username = session['user_id']
+    share_url = f"{BOARD_URL}/?u={username}"
+    return render_template('admin_main.html', username=username, share_url=share_url)
 
 @app.route('/signup', methods=['GET', 'POST'])
 def signup():
     if request.method == 'POST':
-        user = request.form.get('username')
-        pwd = request.form.get('password')
+        user, pwd = request.form.get('username'), request.form.get('password')
         if user and pwd:
             hashed = generate_password_hash(pwd)
             conn = get_master_conn()
@@ -80,10 +80,8 @@ def signup():
                 conn.execute('INSERT INTO admins (username, password) VALUES (?, ?)', (user, hashed))
                 conn.commit()
                 return redirect(url_for('login'))
-            except:
-                flash('そのユーザー名は既に使用されています')
-            finally:
-                conn.close()
+            except: flash('このIDは使われています')
+            finally: conn.close()
     return render_template('signup.html')
 
 @app.route('/logout')
@@ -93,7 +91,5 @@ def logout():
 
 # --- Render用起動設定 ---
 if __name__ == '__main__':
-    # サーバー環境のポートを取得（Render用）
     port = int(os.environ.get("PORT", 5000))
-    # ブラウザ自動起動などは一切行わず、シンプルにリッスンする
     app.run(host="0.0.0.0", port=port)
