@@ -4,12 +4,12 @@ import logging
 from flask import Flask, render_template, request, redirect, url_for, session, flash
 from werkzeug.security import generate_password_hash, check_password_hash
 
-# ログ設定
+# ログを詳細に出してエラー箇所を見つけやすくする
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
-app.secret_key = 'poibox_v34_502_fix'
+app.secret_key = 'poibox_v35_fix_no_shell'
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.path.join(BASE_DIR, 'test_pts.db')
@@ -20,22 +20,27 @@ def get_db_conn():
     conn.execute('PRAGMA journal_mode=WAL;') 
     return conn
 
+# データベースの初期化と自動カラム追加
 def init_db():
-    with get_db_conn() as conn:
-        # 基本テーブル作成
+    conn = get_db_conn()
+    try:
+        # 1. 基本テーブルの作成
         conn.execute('CREATE TABLE IF NOT EXISTS admins (id INTEGER PRIMARY KEY AUTOINCREMENT, username TEXT UNIQUE, password TEXT)')
         conn.execute('CREATE TABLE IF NOT EXISTS listeners (id INTEGER PRIMARY KEY AUTOINCREMENT, liver_owner TEXT, name TEXT, points INTEGER DEFAULT 0, UNIQUE(liver_owner, name))')
         conn.execute('CREATE TABLE IF NOT EXISTS messages (id INTEGER PRIMARY KEY AUTOINCREMENT, liver TEXT, sender TEXT, content TEXT, timestamp DATETIME DEFAULT CURRENT_TIMESTAMP)')
         
-        # 【重要】累計ポイントカラムの自動追加チェック
-        try:
+        # 2. 累計ポイント用カラム(total_points)があるか確認し、なければ追加
+        cursor = conn.execute("PRAGMA table_info(listeners)")
+        columns = [column[1] for column in cursor.fetchall()]
+        if 'total_points' not in columns:
+            logger.info("Adding total_points column...")
             conn.execute('ALTER TABLE listeners ADD COLUMN total_points INTEGER DEFAULT 0')
-            logger.info("Column 'total_points' added to listeners table.")
-        except sqlite3.OperationalError:
-            # 既にカラムが存在する場合はここに来る（無視してOK）
-            pass
         
         conn.commit()
+    except Exception as e:
+        logger.error(f"Database Init Error: {e}")
+    finally:
+        conn.close()
 
 init_db()
 
@@ -50,8 +55,10 @@ def welcome(liver_name):
     listener_data = None
     if request.method == 'POST':
         lname = request.form.get('listener_name')
-        with get_db_conn() as conn:
-            listener_data = conn.execute('SELECT * FROM listeners WHERE liver_owner = ? AND name = ?', (liver_name, lname)).fetchone()
+        conn = get_db_conn()
+        listener_data = conn.execute('SELECT * FROM listeners WHERE liver_owner = ? AND name = ?', (liver_name, lname)).fetchone()
+        conn.close()
+    # テンプレート側(welcome.html)では {{ listener.points }} と {{ listener.total_points }} を使用
     return render_template('welcome.html', liver_name=liver_name, listener=listener_data)
 
 @app.route('/<liver_name>/board.com', methods=['GET', 'POST'])
@@ -71,8 +78,9 @@ def board(liver_name):
 def login():
     if request.method == 'POST':
         user, pwd = request.form.get('username'), request.form.get('password')
-        with get_db_conn() as conn:
-            admin = conn.execute('SELECT * FROM admins WHERE username = ?', (user,)).fetchone()
+        conn = get_db_conn()
+        admin = conn.execute('SELECT * FROM admins WHERE username = ?', (user,)).fetchone()
+        conn.close()
         if admin and check_password_hash(admin['password'], pwd):
             session['user_id'] = user
             return redirect(url_for('admin'))
@@ -110,12 +118,13 @@ def signup():
         user, pwd = request.form.get('username'), request.form.get('password')
         if user and pwd:
             hashed = generate_password_hash(pwd)
-            with get_db_conn() as conn:
-                try:
-                    conn.execute('INSERT INTO admins (username, password) VALUES (?, ?)', (user, hashed))
-                    conn.commit()
-                    return redirect(url_for('login'))
-                except: pass
+            conn = get_db_conn()
+            try:
+                conn.execute('INSERT INTO admins (username, password) VALUES (?, ?)', (user, hashed))
+                conn.commit()
+                return redirect(url_for('login'))
+            except: pass
+            finally: conn.close()
     return render_template('signup.html')
 
 @app.route('/logout')
