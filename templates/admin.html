@@ -99,6 +99,39 @@
         {% endfor %}
     </section>
 </div>
+    <div class="container mt-4">
+    <div class="row">
+        <div class="col-md-8">
+            <h3>💌 届いたメッセージ</h3>
+            <div class="list-group">
+                {% for m in messages %}
+                <div class="list-group-item">
+                    <strong>{{ m.sender }}</strong>: {{ m.content }} 
+                    <small class="text-muted">({{ m.timestamp }})</small>
+                </div>
+                {% endfor %}
+            </div>
+        </div>
+
+        <div class="col-md-4">
+            <div class="card p-3 border-primary">
+                <h5 class="card-title text-primary">🧪 疑似リスナー投稿</h5>
+                <form method="POST">
+                    <div class="mb-2">
+                        <label class="form-label small">リスナー名</label>
+                        <input type="text" name="pseudo_sender" class="form-control form-control-sm" placeholder="例：テストくん">
+                    </div>
+                    <div class="mb-2">
+                        <label class="form-label small">内容</label>
+                        <textarea name="content" class="form-control form-control-sm" rows="3" required></textarea>
+                    </div>
+                    <button type="submit" class="btn btn-primary btn-sm w-100">テスト投稿する</button>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
 
 </body>
+
 </html>
