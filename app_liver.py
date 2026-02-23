@@ -9,30 +9,29 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
-app.secret_key = 'poibox_v20_url_fix'
+app.secret_key = 'poibox_v21_final_url_fix'
 
 # --- データベース設定 ---
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.path.join(BASE_DIR, 'test_pts.db')
 
 def get_db_conn():
+    """データベース接続。"""
     conn = sqlite3.connect(DB_PATH, check_same_thread=False, timeout=10)
     conn.row_factory = sqlite3.Row
     return conn
 
-# テーブル自動作成
 def init_db():
+    """テーブルの準備。"""
     conn = get_db_conn()
-    if conn:
-        try:
-            conn.execute('CREATE TABLE IF NOT EXISTS admins (id INTEGER PRIMARY KEY AUTOINCREMENT, username TEXT UNIQUE NOT NULL, password TEXT NOT NULL)')
-            conn.execute('CREATE TABLE IF NOT EXISTS messages (id INTEGER PRIMARY KEY AUTOINCREMENT, liver TEXT NOT NULL, sender TEXT, content TEXT NOT NULL, timestamp DATETIME DEFAULT CURRENT_TIMESTAMP)')
-            conn.commit()
-            logger.info("Database initialized.")
-        except Exception as e:
-            logger.error(f"INIT DB ERROR: {e}")
-        finally:
-            conn.close()
+    try:
+        conn.execute('CREATE TABLE IF NOT EXISTS admins (id INTEGER PRIMARY KEY AUTOINCREMENT, username TEXT UNIQUE NOT NULL, password TEXT NOT NULL)')
+        conn.execute('CREATE TABLE IF NOT EXISTS messages (id INTEGER PRIMARY KEY AUTOINCREMENT, liver TEXT NOT NULL, sender TEXT, content TEXT NOT NULL, timestamp DATETIME DEFAULT CURRENT_TIMESTAMP)')
+        conn.commit()
+    except Exception as e:
+        logger.error(f"DATABASE INIT ERROR: {e}")
+    finally:
+        conn.close()
 
 init_db()
 
@@ -40,17 +39,18 @@ init_db()
 # ルート設定
 # ==========================================
 
+# 1. トップページ
 @app.route('/')
 def index():
     return render_template('index.html')
 
-# --- 【重要】ここがリスナー用URLの設定です ---
-# https://.../test/welcome のような形式に対応させます
-@app.route('/<username>/welcome', methods=['GET', 'POST'])
+# 2. 【重要】リスナーページ (URL: /ユーザー名/welcome.com)
+# 例: https://poibox-admin.onrender.com/test/welcome.com
+@app.route('/<username>/welcome.com', methods=['GET', 'POST'])
 def welcome(username):
     conn = get_db_conn()
     
-    # メッセージ投稿（POST）があった場合
+    # メッセージ投稿
     if request.method == 'POST':
         sender = request.form.get('sender', '匿名リスナー')
         content = request.form.get('content')
@@ -59,20 +59,17 @@ def welcome(username):
                 conn.execute('INSERT INTO messages (liver, sender, content) VALUES (?, ?, ?)', 
                              (username, sender, content))
                 conn.commit()
-                flash(f'{username} さんにメッセージを送ったよ！', 'success')
+                flash('メッセージを送信しました！')
             except Exception as e:
-                logger.error(f"投稿エラー: {e}")
+                logger.error(f"POST ERROR: {e}")
 
-    # そのライバー宛の最新メッセージ10件を取得
-    messages = []
-    if conn:
-        messages = conn.execute('SELECT * FROM messages WHERE liver = ? ORDER BY id DESC LIMIT 10', 
-                                (username,)).fetchall()
-        conn.close()
+    # 最新メッセージ取得
+    messages = conn.execute('SELECT * FROM messages WHERE liver = ? ORDER BY id DESC LIMIT 10', (username,)).fetchall()
+    conn.close()
     
     return render_template('welcome.html', liver_name=username, messages=messages)
 
-# --- ライバー用：ログイン ---
+# 3. ライバーログイン
 @app.route('/login', methods=['GET', 'POST'])
 def login():
     if request.method == 'POST':
@@ -86,43 +83,45 @@ def login():
             session['user_id'] = user
             return redirect(url_for('admin'))
         else:
-            flash('名前かパスワードが違います')
-            
+            flash('名前またはパスワードが違います')
     return render_template('login.html')
 
-# --- ライバー用：管理画面 ---
+# 4. ライバー管理画面 (URL: /admin)
 @app.route('/admin')
 def admin():
     if 'user_id' not in session:
         return redirect(url_for('login'))
     
     username = session['user_id']
-    # リンクの生成方法も変更：/ユーザー名/welcome になるように
-    share_url = f"{request.host_url}{username}/welcome"
+    # 修正したURL形式に合わせた配布用URL
+    share_url = f"{request.host_url}{username}/welcome.com"
     
     conn = get_db_conn()
-    messages = conn.execute('SELECT * FROM messages WHERE liver = ? ORDER BY id DESC', 
-                            (username,)).fetchall()
+    messages = conn.execute('SELECT * FROM messages WHERE liver = ? ORDER BY id DESC', (username,)).fetchall()
     conn.close()
     
     return render_template('admin.html', username=username, share_url=share_url, messages=messages)
 
-# --- ライバー用：新規登録 ---
+# 5. 新規登録
 @app.route('/signup', methods=['GET', 'POST'])
 def signup():
     if request.method == 'POST':
-        user, pwd = request.form.get('username'), request.form.get('password')
+        user = request.form.get('username')
+        pwd = request.form.get('password')
         if user and pwd:
             hashed = generate_password_hash(pwd)
-            with get_db_conn() as conn:
-                try:
-                    conn.execute('INSERT INTO admins (username, password) VALUES (?, ?)', (user, hashed))
-                    conn.commit()
-                    return redirect(url_for('login'))
-                except: flash('その名前は使われています')
+            conn = get_db_conn()
+            try:
+                conn.execute('INSERT INTO admins (username, password) VALUES (?, ?)', (user, hashed))
+                conn.commit()
+                return redirect(url_for('login'))
+            except:
+                flash('その名前は登録済みです')
+            finally:
+                conn.close()
     return render_template('signup.html')
 
-# --- ログアウト ---
+# 6. ログアウト
 @app.route('/logout')
 def logout():
     session.clear()
