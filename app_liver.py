@@ -4,7 +4,7 @@ from flask import Flask, render_template, request, redirect, url_for, session, f
 from werkzeug.security import generate_password_hash, check_password_hash
 
 app = Flask(__name__)
-app.secret_key = 'poibox_stable_ultimate_v200'
+app.secret_key = 'poibox_perfect_stable_v300'
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.path.join(BASE_DIR, 'test_pts.db')
@@ -12,9 +12,10 @@ DB_PATH = os.path.join(BASE_DIR, 'test_pts.db')
 def get_db_conn():
     conn = sqlite3.connect(DB_PATH, check_same_thread=False, timeout=30)
     conn.row_factory = sqlite3.Row
-    conn.execute('PRAGMA journal_mode=WAL;') 
+    conn.execute('PRAGMA journal_mode=WAL;') # 同時アクセスに強くする
     return conn
 
+# データベース初期化
 def init_db():
     with get_db_conn() as conn:
         conn.execute('CREATE TABLE IF NOT EXISTS admins (id INTEGER PRIMARY KEY AUTOINCREMENT, username TEXT UNIQUE, password TEXT)')
@@ -36,7 +37,6 @@ def index():
 # --- 2. 通帳ページ (mypage.html) ---
 @app.route('/<liver_name>/welcome', methods=['GET', 'POST'])
 def welcome(liver_name):
-    # ログイン処理
     if request.method == 'POST':
         lname = request.form.get('listener_name')
         if lname:
@@ -60,7 +60,7 @@ def welcome(liver_name):
     
     return render_template('welcome.html', liver_name=liver_name)
 
-# --- 3. 掲示板ページ (安定化ルート) ---
+# --- 3. 掲示板 (ここが修正のキモです) ---
 @app.route('/<liver_name>/board', methods=['GET', 'POST'])
 def board(liver_name):
     logged_in_name = session.get(f'user_{liver_name}')
@@ -69,7 +69,7 @@ def board(liver_name):
         action = request.form.get('action')
         sender = logged_in_name if logged_in_name else request.form.get('sender', '').strip()
         
-        # 登録なしユーザーの書き込み制限
+        # 登録チェック
         with get_db_conn() as conn:
             listener = conn.execute('SELECT * FROM listeners WHERE liver_owner = ? AND name = ?', (liver_name, sender)).fetchone()
             if not listener:
@@ -80,15 +80,17 @@ def board(liver_name):
                 msg_id = request.form.get('message_id')
                 conn.execute('UPDATE messages SET likes = likes + 1 WHERE id = ?', (msg_id,))
             else:
+                # 重要: HTMLの <input name="message"> を確実に取得
                 msg_text = request.form.get('message')
                 parent_id = request.form.get('parent_id')
                 if msg_text:
                     conn.execute('INSERT INTO messages (liver, sender, content, parent_id) VALUES (?, ?, ?, ?)', 
-                                 (liver_name, sender, msg_text, parent_id if parent_id else None))
+                                 (liver_name, sender, msg_text, int(parent_id) if parent_id else None))
             conn.commit()
+        # 投稿後は自分自身のページにリダイレクトして表示を更新
         return redirect(url_for('board', liver_name=liver_name))
 
-    # 表示用データ取得
+    # メッセージの読み込み
     with get_db_conn() as conn:
         all_msgs = conn.execute('SELECT * FROM messages WHERE liver = ? ORDER BY id ASC', (liver_name,)).fetchall()
     
@@ -101,13 +103,13 @@ def board(liver_name):
                            replies=replies, 
                            logged_in_name=logged_in_name)
 
-# --- 4. ログアウト (退出) ---
+# --- 4. ログアウト ---
 @app.route('/logout')
 def logout():
     session.clear()
     return redirect(url_for('index'))
 
-# --- 管理画面 (ログイン・サインアップ) ---
+# --- 5. 管理画面 ---
 @app.route('/login', methods=['GET', 'POST'])
 def login():
     if request.method == 'POST':
@@ -117,7 +119,6 @@ def login():
             if admin and check_password_hash(admin['password'], pwd):
                 session['admin_user'] = user
                 return redirect(url_for('admin'))
-        flash('ログイン失敗')
     return render_template('login.html')
 
 @app.route('/signup', methods=['GET', 'POST'])
