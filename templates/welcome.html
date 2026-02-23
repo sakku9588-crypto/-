@@ -2,34 +2,61 @@
 <html lang="ja">
 <head>
     <meta charset="UTF-8">
-    <title>{{ liver_name }}さんのページ</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{ liver_name }} 通帳</title>
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css">
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;700&family=Roboto+Mono:wght@700&display=swap" rel="stylesheet">
+    <style>
+        body { background-color: #d1d8e0; font-family: 'Noto Sans JP', sans-serif; height: 100vh; display: flex; align-items: center; }
+        .passbook {
+            background: linear-gradient(135deg, #2c3e50, #000000);
+            color: #d4af37; /* ゴールド文字 */
+            border-radius: 20px;
+            padding: 30px;
+            box-shadow: 0 15px 35px rgba(0,0,0,0.4);
+            border: 2px solid #d4af37;
+        }
+        .passbook-title { font-size: 0.8rem; letter-spacing: 3px; color: #fff; opacity: 0.7; }
+        .user-name { font-size: 1.5rem; color: #fff; margin-bottom: 20px; border-bottom: 1px solid #d4af37; display: inline-block; }
+        .point-box { background: rgba(255,255,255,0.05); border-radius: 10px; padding: 20px; margin-bottom: 15px; }
+        .current-pts { font-family: 'Roboto Mono', monospace; font-size: 3.5rem; color: #fff; line-height: 1; }
+        .total-pts { font-family: 'Roboto Mono', monospace; font-size: 1.2rem; color: #d4af37; }
+        .label { font-size: 0.7rem; color: #aaa; text-transform: uppercase; }
+        .btn-close-pb { color: #aaa; text-decoration: none; font-size: 0.8rem; }
+    </style>
 </head>
-<body class="bg-light">
-    <div class="container mt-5" style="max-width: 500px;">
-        {% with messages = get_flashed_messages() %}
-            {% if messages %}{% for m in messages %}<div class="alert alert-danger">{{ m }}</div>{% endfor %}{% endif %}
-        {% endwith %}
-
+<body>
+    <div class="container" style="max-width: 450px;">
         {% if listener %}
-        <div class="card shadow-lg border-0 text-center p-5 bg-gradient text-white" style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); border-radius: 30px;">
-            <h4 class="mb-4">{{ listener.name }} さんの通帳</h4>
-            <div class="display-1 fw-bold mb-3">{{ listener.points }}<small class="fs-4">pts</small></div>
-            <p class="opacity-75">ライバー：{{ liver_name }}</p>
-            <a href="/{{ liver_name }}/welcome" class="btn btn-outline-light btn-sm mt-3">ログアウト（戻る）</a>
+        <div class="passbook text-center">
+            <div class="passbook-title mb-2">OFFICIAL PASSBOOK</div>
+            <div class="user-name">{{ listener.name }} 様</div>
+            
+            <div class="point-box">
+                <div class="label">Balance / 現在のポイント</div>
+                <div class="current-pts">{{ "{:,}".format(listener.points) }}<small style="font-size: 1rem; margin-left: 5px;">pts</small></div>
+            </div>
+
+            <div class="point-box">
+                <div class="label">Total / 累計獲得ポイント</div>
+                <div class="total-pts">{{ "{:,}".format(listener.total_points) }} pts</div>
+            </div>
+
+            <div class="mt-4">
+                <p class="small text-white-50">Authorized by {{ liver_name }}</p>
+                <a href="/{{ liver_name }}/welcome" class="btn-close-pb">[ CLOSE ]</a>
+            </div>
         </div>
         {% else %}
-        <div class="card shadow p-4 border-0" style="border-radius: 20px;">
-            <h3 class="text-center mb-4">{{ liver_name }} ポータル</h3>
+        <div class="card p-4 shadow border-0" style="border-radius: 15px;">
+            <h4 class="text-center mb-4">{{ liver_name }} 通帳ログイン</h4>
             <form method="POST">
-                <div class="mb-3">
-                    <label class="form-label">登録したお名前を入力してください</label>
-                    <input type="text" name="listener_name" class="form-control form-control-lg text-center" placeholder="例：ねこ助" required>
-                </div>
-                <button type="submit" class="btn btn-success w-100 btn-lg mb-3">通帳を見る</button>
+                <input type="text" name="listener_name" class="form-control form-control-lg text-center mb-3" placeholder="お名前" required>
+                <button type="submit" class="btn btn-dark w-100 btn-lg">通帳を開く</button>
             </form>
-            <hr>
-            <a href="/{{ liver_name }}/board.com" class="btn btn-primary w-100">掲示板へ行く</a>
+            <div class="text-center mt-3">
+                <a href="/{{ liver_name }}/board.com" class="text-muted small text-decoration-none">掲示板へ</a>
+            </div>
         </div>
         {% endif %}
     </div>
