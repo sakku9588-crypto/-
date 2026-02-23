@@ -1,23 +1,35 @@
 <!DOCTYPE html>
 <html lang="ja">
 <head>
-    <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>ポイぼっくす</title>
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
-    <style>
-        body { background: #fff5f5; display: flex; align-items: center; min-height: 100vh; justify-content: center; }
-        .welcome-card { background: white; padding: 40px; border-radius: 30px; border: 4px solid #ffccd5; text-align: center; max-width: 400px; width: 90%; }
-        .btn-entry { background: #ff4d6d; color: white; border-radius: 50px; padding: 15px; width: 100%; border: none; font-weight: bold; }
-    </style>
+    <meta charset="UTF-8">
+    <title>{{ liver_name }}さんのwelcomeページ</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css">
 </head>
-<body>
-    <div class="welcome-card shadow-lg">
-        <h2 class="mb-4">ポイぼっくす</h2>
-        <p class="text-muted small">YouTubeのお名前（@〜）を教えてね</p>
-        <form method="POST">
-            <input type="text" name="handle" class="form-control mb-4 text-center" placeholder="@username" required autofocus>
-            <button type="submit" class="btn-entry">ポイぼっくすに入る 🐱</button>
-        </form>
+<body class="bg-light">
+    <div class="container mt-5" style="max-width: 500px;">
+        {% if listener %}
+        <div class="card shadow-lg border-0 text-center p-4 bg-primary text-white" style="border-radius: 20px;">
+            <h2>{{ listener.name }} さんの通帳</h2>
+            <div class="display-1 my-3 fw-bold">{{ listener.points }}<small class="fs-4">pts</small></div>
+            <p>ライバー：{{ liver_name }}</p>
+            <a href="/{{ liver_name }}/welcome" class="btn btn-light btn-sm mt-3">戻る</a>
+        </div>
+        {% else %}
+        <div class="card shadow p-4 border-0" style="border-radius: 20px;">
+            <h3 class="text-center mb-4">{{ liver_name }}さんの掲示板・通帳</h3>
+            <form method="POST">
+                <div class="mb-3">
+                    <label class="form-label">お名前を入力してください</label>
+                    <input type="text" name="listener_name" class="form-control form-control-lg text-center" placeholder="例：ねこ助" required>
+                </div>
+                <button type="submit" class="btn btn-success w-100 btn-lg">通帳を見る</button>
+            </form>
+            <hr>
+            <div class="text-center">
+                <a href="/{{ liver_name }}/board.com" class="btn btn-outline-primary">掲示板はこちら</a>
+            </div>
+        </div>
+        {% endif %}
     </div>
 </body>
 </html>
