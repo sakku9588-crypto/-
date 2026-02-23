@@ -9,7 +9,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
-app.secret_key = 'poibox_v16_admin_route'
+app.secret_key = 'poibox_v17_admin_complete'
 
 # --- データベース設定 ---
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -21,7 +21,7 @@ def get_db_conn():
     return conn
 
 def init_db():
-    """テーブルの存在を保証する"""
+    """テーブルが存在しない場合のみ作成"""
     conn = get_db_conn()
     try:
         conn.execute('''
@@ -56,6 +56,7 @@ init_db()
 def index():
     return render_template('index.html')
 
+# リスナー用ページ
 @app.route('/welcome')
 @app.route('/board', endpoint='board')
 def welcome():
@@ -70,35 +71,33 @@ def login():
         pwd = request.form.get('password')
         
         conn = get_db_conn()
-        admin = conn.execute('SELECT * FROM admins WHERE username = ?', (user,)).fetchone()
+        admin_data = conn.execute('SELECT * FROM admins WHERE username = ?', (user,)).fetchone()
         conn.close()
         
-        if admin and check_password_hash(admin['password'], pwd):
+        if admin_data and check_password_hash(admin_data['password'], pwd):
             session['user_id'] = user
-            # ログイン成功後、/admin へ飛ばす
-            return redirect(url_for('admin_main'))
+            # ログイン成功後、関数名 'admin' (URL: /admin) へリダイレクト
+            return redirect(url_for('admin'))
         else:
             flash('名前またはパスワードが正しくありません')
             
     return render_template('login.html')
 
-# --- 管理画面（mypageからadminに変更） ---
+# --- 管理画面（URL: /admin / 表示ファイル: admin.html） ---
 @app.route('/admin')
-def admin_main():
+def admin():
     if 'user_id' not in session:
         return redirect(url_for('login'))
     
     username = session['user_id']
     share_url = f"{request.host_url}welcome?u={username}"
     
-    # 必要に応じてDBからメッセージなどを取得
-    messages = []
+    # メッセージ取得
     with get_db_conn() as conn:
         messages = conn.execute('SELECT * FROM messages WHERE liver = ? ORDER BY id DESC', (username,)).fetchall()
         
-    # mypage.html というファイル名のままでも中身が管理画面なら動きますが、
-    # もし admin.html にリネームしているならここを 'admin.html' に変えてください
-    return render_template('mypage.html', username=username, share_url=share_url, messages=messages)
+    # ここで 'admin.html' を読み込むように指定します
+    return render_template('admin.html', username=username, share_url=share_url, messages=messages)
 
 @app.route('/signup', methods=['GET', 'POST'])
 def signup():
