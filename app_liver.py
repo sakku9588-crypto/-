@@ -4,25 +4,41 @@ import logging
 from flask import Flask, render_template, request, redirect, url_for, session, flash
 from werkzeug.security import generate_password_hash, check_password_hash
 
+# --- ログ出力（エラーの原因をRenderのLogsに表示させるため） ---
 logging.basicConfig(level=logging.INFO)
-app = Flask(__name__)
-app.secret_key = 'poibox_vanilla_test'
+logger = logging.getLogger(__name__)
 
-# データベースのパス（GitHubから送られたファイルを直接指定）
+app = Flask(__name__)
+app.secret_key = 'poibox_vanilla_stable_v10'
+
+# --- データベースの絶対パスを確実に取得 ---
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.path.join(BASE_DIR, 'test_pts.db')
 
 def get_db_conn():
-    # check_same_thread=False は SQLite を Web で使う際のおまじない
-    conn = sqlite3.connect(DB_PATH, check_same_thread=False)
-    conn.row_factory = sqlite3.Row
-    return conn
+    # Render環境でエラーになりにくい設定で接続
+    try:
+        conn = sqlite3.connect(DB_PATH, check_same_thread=False, timeout=10)
+        conn.row_factory = sqlite3.Row
+        return conn
+    except Exception as e:
+        logger.error(f"Database Connection Error: {e}")
+        return None
 
-# テーブルがなければ作成（バニラさんのログイン用）
-with get_db_conn() as conn:
-    conn.execute('CREATE TABLE IF NOT EXISTS admins (id INTEGER PRIMARY KEY AUTOINCREMENT, username TEXT UNIQUE, password TEXT)')
-    # ここにポイント保存用テーブルなどが無ければ追加
-    conn.execute('CREATE TABLE IF NOT EXISTS points (id INTEGER PRIMARY KEY AUTOINCREMENT, user_name TEXT, pts INTEGER)')
+# --- 起動時にDBとテーブルをチェック ---
+def init_db():
+    conn = get_db_conn()
+    if conn:
+        try:
+            conn.execute('CREATE TABLE IF NOT EXISTS admins (id INTEGER PRIMARY KEY AUTOINCREMENT, username TEXT UNIQUE, password TEXT)')
+            conn.commit()
+            logger.info("Database initialized successfully.")
+        except Exception as e:
+            logger.error(f"Database Init Error: {e}")
+        finally:
+            conn.close()
+
+init_db()
 
 @app.route('/')
 def index():
@@ -30,7 +46,6 @@ def index():
 
 @app.route('/welcome')
 def welcome():
-    # バニラ専用モード
     liver_name = "バニラ"
     return render_template('welcome.html', liver_name=liver_name)
 
@@ -39,8 +54,10 @@ def login():
     if request.method == 'POST':
         user = request.form.get('username')
         pwd = request.form.get('password')
-        with get_db_conn() as conn:
+        conn = get_db_conn()
+        if conn:
             admin = conn.execute('SELECT * FROM admins WHERE username = ?', (user,)).fetchone()
+            conn.close()
             if admin and check_password_hash(admin['password'], pwd):
                 session['user_id'] = user
                 return redirect(url_for('admin_panel'))
@@ -49,18 +66,12 @@ def login():
 
 @app.route('/admin_panel')
 def admin_panel():
-    if 'user_id' not in session: return redirect(url_for('login'))
+    if 'user_id' not in session:
+        return redirect(url_for('login'))
     return render_template('admin_main.html', username=session['user_id'])
 
-# --- データを書き込むテスト用のルート ---
-@app.route('/add_test_pts')
-def add_test_pts():
-    # 読み書きのテスト：アクセスするとポイントが増える
-    with get_db_conn() as conn:
-        conn.execute('INSERT INTO points (user_name, pts) VALUES (?, ?)', ("バニラ", 100))
-        conn.commit()
-    return "DBに書き込みました！"
-
+# --- Render専用起動設定 ---
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 5000))
-    app.run(host="0.0.0.0", port=port)
+    # debug=False にして安定性を高める
+    app.run(host="0.0.0.0", port=port, debug=False)
