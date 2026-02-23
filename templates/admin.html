@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <title>ポイぼっくす Admin - {{ username }}</title>
+    <style>
+        :root { --primary: #6c5ce7; --accent: #fd79a8; --bg: #f9f9fb; --success: #00b894; --danger: #ff7675; }
+        body { font-family: 'Hiragino Kaku Gothic ProN', sans-serif; background: var(--bg); margin: 0; padding: 20px; color: #2d3436; }
+        .container { max-width: 1000px; margin: auto; background: white; padding: 30px; border-radius: 20px; box-shadow: 0 10px 25px rgba(0,0,0,0.05); }
+        header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 30px; }
+        .alert { padding: 10px; border-radius: 10px; margin-bottom: 20px; color: white; text-align: center; list-style: none; }
+        .alert-success { background: var(--success); }
+        .alert-danger { background: var(--danger); }
+        
+        .search-box { display: flex; gap: 10px; margin-bottom: 25px; }
+        .search-box input { flex-grow: 1; padding: 12px; border: 2px solid #eee; border-radius: 10px; }
+        
+        table { width: 100%; border-collapse: collapse; }
+        th { background: #f4f7f6; padding: 15px; text-align: left; color: #636e72; }
+        td { padding: 15px; border-bottom: 1px solid #eee; }
+        
+        .pts-now { font-size: 1.4em; color: var(--accent); font-weight: bold; }
+        .pts-total { font-size: 0.8em; color: #b2bec3; }
+
+        .op-form { display: flex; flex-direction: column; gap: 8px; }
+        .input-row { display: flex; gap: 8px; }
+        .input-amt { width: 80px; padding: 8px; border: 2px solid #ddd; border-radius: 8px; font-weight: bold; }
+        .input-reason { flex-grow: 1; padding: 8px; border: 1px solid #ddd; border-radius: 8px; font-size: 0.9em; }
+
+        .btn { border: none; padding: 8px 15px; border-radius: 8px; cursor: pointer; font-weight: bold; color: white; }
+        .btn-add { background: var(--success); }
+        .btn-sub { background: var(--danger); }
+
+        .history-section { margin-top: 50px; border-top: 2px solid #eee; padding-top: 20px; }
+        .history-item { font-size: 0.85em; padding: 8px; border-bottom: 1px dashed #eee; display: flex; justify-content: space-between; }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    {% with messages = get_flashed_messages(with_categories=true) %}
+      {% if messages %}
+        {% for category, message in messages %}
+          <div class="alert alert-{{ category }}">{{ message }}</div>
+        {% endfor %}
+      {% endif %}
+    {% endwith %}
+
+    <header>
+        <h1>ポイント管理（累計順）</h1>
+        <a href="{{ url_for('logout') }}" style="color:#aaa; text-decoration:none;">🚪 ログアウト</a>
+    </header>
+
+    <form action="/" method="GET" class="search-box">
+        <input type="text" name="q" value="{{ q or '' }}" placeholder="リスナー名で検索...">
+        <button type="submit" class="btn" style="background:var(--primary)">検索</button>
+    </form>
+
+    <table>
+        <thead>
+            <tr>
+                <th>ハンドル</th>
+                <th>現在 / 累計</th>
+                <th>ポイント操作</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for user in users %}
+            <tr>
+                <td><strong>{{ user.handle }}</strong></td>
+                <td>
+                    <span class="pts-now">{{ user.points }}</span> 
+                    <span class="pts-total">/ {{ user.total_points }} total</span>
+                </td>
+                <td>
+                    <form action="{{ url_for('add_points') }}" method="POST" class="op-form">
+                        <input type="hidden" name="handle" value="{{ user.handle }}">
+                        <input type="hidden" name="current_q" value="{{ q or '' }}">
+                        <div class="input-row">
+                            <input type="number" name="amount" value="100" class="input-amt">
+                            <input type="text" name="reason" placeholder="理由を入力（例：景品交換）" class="input-reason">
+                            <button type="submit" name="op" value="add" class="btn btn-add">付与</button>
+                            <button type="submit" name="op" value="sub" class="btn btn-sub">減算</button>
+                        </div>
+                    </form>
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+
+    <section class="history-section">
+        <h3>📜 最近の操作履歴</h3>
+        {% for item in history %}
+        <div class="history-item">
+            <span><strong>{{ item.handle }}</strong>: {{ item.amount }}pts ({{ item.reason }})</span>
+            <span style="color:#ccc;">{{ item.created_at }}</span>
+        </div>
+        {% endfor %}
+    </section>
+</div>
+
+</body>
+</html>
