@@ -3,80 +3,62 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>掲示板</title>
+    <title>{{ liver_name }} 掲示板</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <style>
-        body { background: #f0f2f5; padding-bottom: 120px; }
-        .post-card { background: white; border-radius: 15px; padding: 15px; margin-bottom: 15px; border: 1px solid #ddd; }
-        .reply-card { background: #fff9fa; border-left: 5px solid #ff4d6d; border-radius: 0 10px 10px 0; padding: 10px; margin-top: 10px; margin-left: 40px; }
+        body { background: #f0f2f5; padding-bottom: 150px; }
+        .post-card { background: white; border-radius: 15px; padding: 15px; margin-bottom: 15px; border: 1px solid #ddd; box-shadow: 0 2px 5px rgba(0,0,0,0.05); }
         .handle-name { font-weight: bold; color: #ff4d6d; }
-        .btn-reply { font-size: 0.8rem; color: #65676b; cursor: pointer; border: 1px solid #ddd; padding: 2px 8px; border-radius: 5px; background: #eee; }
-        .btn-reply:hover { background: #ddd; }
-        .input-area { position: fixed; bottom: 0; left: 0; width: 100%; background: white; padding: 15px; border-top: 2px solid #ff4d6d; z-index: 1000; }
+        .timestamp { font-size: 0.75rem; color: #888; margin-left: 10px; }
+        .input-area { position: fixed; bottom: 0; left: 0; width: 100%; background: white; padding: 15px; border-top: 1px solid #ddd; z-index: 1000; }
+        .btn-post { background-color: #ff4d6d; border: none; color: white; }
+        .btn-post:hover { background-color: #ff758f; }
     </style>
 </head>
-<body class="container py-3">
+<body class="container py-4">
 
     <div class="d-flex justify-content-between align-items-center mb-4">
-        <h3>🐱 さく猫掲示板</h3>
-        <a href="/mypage" class="btn btn-outline-secondary btn-sm">← 通帳に戻る</a>
+        <h4 class="mb-0 fw-bold">💬 {{ liver_name }} 掲示板</h4>
+        <a href="/{{ liver_name }}/welcome" class="btn btn-sm btn-outline-secondary rounded-pill px-3">通帳へ戻る</a>
     </div>
 
-    {% for post in posts %}
-    <div class="post-card shadow-sm">
-        <div class="handle-name">{{ post.handle }}</div>
-        <div class="my-2" style="white-space: pre-wrap;">{{ post.message }}</div>
-        
-        <div class="d-flex align-items-center">
-            <a href="/like/{{ post.id }}" class="text-decoration-none me-3">👍 {{ post.like_count }}</a>
-            <span class="btn-reply" onclick="setReply('{{ post.id }}', '{{ post.handle }}')">💬 返信する</span>
-        </div>
-
-        {% for reply in replies if reply.parent_id == post.id %}
-        <div class="reply-card">
-            <div class="handle-name" style="font-size: 0.8rem;">{{ reply.handle }}</div>
-            <div class="small my-1" style="white-space: pre-wrap;">{{ reply.message }}</div>
-            
-            {% if current_user == post.handle %}
-            <div class="text-end mt-2">
-                <span class="btn-reply" style="font-size: 0.7rem; padding: 2px 6px;" onclick="setReply('{{ post.id }}', '{{ reply.handle }}')">💬 スレ主からレス</span>
+    <div id="board-messages">
+        {% for m in messages %}
+        <div class="post-card">
+            <div class="d-flex justify-content-between align-items-start mb-2">
+                <div>
+                    <span class="handle-name">{{ m.sender }}</span>
+                    <span class="timestamp">{{ m.timestamp }}</span>
+                </div>
             </div>
-            {% endif %}
+            <div class="post-content">
+                {{ m.content }}
+            </div>
+        </div>
+        {% else %}
+        <div class="text-center text-muted mt-5">
+            <p>まだ書き込みがありません。<br>最初のメッセージをポイしてみよう！</p>
         </div>
         {% endfor %}
     </div>
-    {% endfor %}
 
     <div class="input-area">
-        <form method="POST" class="container">
-            <div id="reply-banner" class="alert alert-danger py-1 px-2 mb-2 small" style="display:none; background-color: #ffeef2;">
-                <strong>@<span id="reply-target-name"></span></strong> さんへ返信中... 
-                <button type="button" class="btn-close float-end" style="font-size: 0.5rem;" onclick="cancelReply()"></button>
-            </div>
-            
-            <input type="hidden" name="parent_id" id="parent_id_input">
-            <div class="input-group">
-                <input type="text" name="message" id="message_field" class="form-control" placeholder="メッセージをポイする..." required>
-                <button type="submit" class="btn btn-danger">送信</button>
-            </div>
-        </form>
+        <div class="container" style="max-width: 600px;">
+            <form method="POST">
+                <div class="row g-2">
+                    <div class="col-4">
+                        <input type="text" name="sender" class="form-control" placeholder="お名前" required>
+                    </div>
+                    <div class="col-8">
+                        <div class="input-group">
+                            <input type="text" name="content" class="form-control" placeholder="メッセージをポイする..." required>
+                            <button type="submit" class="btn btn-post">送信</button>
+                        </div>
+                    </div>
+                </div>
+            </form>
+        </div>
     </div>
 
-    <script>
-        function setReply(id, name) {
-            document.getElementById('parent_id_input').value = id;
-            document.getElementById('reply-target-name').innerText = name;
-            document.getElementById('reply-banner').style.display = 'block';
-            document.getElementById('message_field').placeholder = "@" + name + " さんへ...";
-            document.getElementById('message_field').focus();
-            window.scrollTo(0, document.body.scrollHeight);
-        }
-
-        function cancelReply() {
-            document.getElementById('parent_id_input').value = '';
-            document.getElementById('reply-banner').style.display = 'none';
-            document.getElementById('message_field').placeholder = "メッセージをポイする...";
-        }
-    </script>
 </body>
 </html>
