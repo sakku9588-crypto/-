@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <title>ポイぼっくす - 管理画面</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css">
+    <style>
+        body { background-color: #f0f2f5; padding: 50px; }
+        .admin-card { background: white; padding: 30px; border-radius: 15px; box-shadow: 0 4px 10px rgba(0,0,0,0.1); }
+        .url-box { background: #e9ecef; padding: 15px; border-radius: 5px; font-family: monospace; word-break: break-all; }
+    </style>
+</head>
+<body>
+    <div class="container text-center">
+        <div class="admin-card mx-auto" style="max-width: 600px;">
+            <h1 class="mb-4">こんにちは、{{ username }}さん！</h1>
+            <p class="text-muted">あなたの専用掲示板の準備ができています。</p>
+            
+            <hr>
+            
+            <h5 class="mt-4">リスナー配布用URL</h5>
+            <p>このURLをリスナーさんに伝えてください：</p>
+            <div class="url-box mb-4">
+                {{ request.host_url }}welcome
+            </div>
+            
+            <a href="/logout" class="btn btn-outline-danger">ログアウト</a>
+        </div>
+    </div>
+</body>
+</html>
