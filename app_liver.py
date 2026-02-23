@@ -9,7 +9,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
-app.secret_key = 'poibox_v23_test_post'
+app.secret_key = 'poibox_v24_listener_management'
 
 # --- データベース設定 ---
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -23,8 +23,24 @@ def get_db_conn():
 def init_db():
     conn = get_db_conn()
     try:
-        conn.execute('CREATE TABLE IF NOT EXISTS admins (id INTEGER PRIMARY KEY AUTOINCREMENT, username TEXT UNIQUE NOT NULL, password TEXT NOT NULL)')
-        conn.execute('CREATE TABLE IF NOT EXISTS messages (id INTEGER PRIMARY KEY AUTOINCREMENT, liver TEXT NOT NULL, sender TEXT, content TEXT NOT NULL, timestamp DATETIME DEFAULT CURRENT_TIMESTAMP)')
+        # admins: ライバーのログイン情報
+        conn.execute('''
+            CREATE TABLE IF NOT EXISTS admins (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                username TEXT UNIQUE NOT NULL,
+                password TEXT NOT NULL
+            )
+        ''')
+        # messages: リスナーからのメッセージ
+        conn.execute('''
+            CREATE TABLE IF NOT EXISTS messages (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                liver TEXT NOT NULL,
+                sender TEXT NOT NULL,
+                content TEXT NOT NULL,
+                timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
         conn.commit()
     except Exception as e:
         logger.error(f"DATABASE INIT ERROR: {e}")
@@ -33,10 +49,13 @@ def init_db():
 
 init_db()
 
+# --- ルート設定 ---
+
 @app.route('/')
 def index():
     return render_template('index.html')
 
+# リスナー用ページ (URL: /username/welcome.com)
 @app.route('/<username>/welcome.com', methods=['GET', 'POST'])
 def welcome(username):
     conn = get_db_conn()
@@ -50,6 +69,7 @@ def welcome(username):
     conn.close()
     return render_template('welcome.html', liver_name=username, messages=messages)
 
+# ログイン
 @app.route('/login', methods=['GET', 'POST'])
 def login():
     if request.method == 'POST':
@@ -64,8 +84,8 @@ def login():
         flash('ログイン失敗')
     return render_template('login.html')
 
-# --- 【修正箇所】管理画面で疑似投稿ができるようにする ---
-@app.route('/admin', methods=['GET', 'POST'])
+# --- 【メイン】管理画面：リスナー一覧を表示 ---
+@app.route('/admin')
 def admin():
     if 'user_id' not in session:
         return redirect(url_for('login'))
@@ -73,34 +93,36 @@ def admin():
     username = session['user_id']
     conn = get_db_conn()
     
-    # 疑似リスナーとしての投稿処理
-    if request.method == 'POST':
-        pseudo_sender = request.form.get('pseudo_sender', '疑似リスナー')
-        content = request.form.get('content')
-        if content:
-            conn.execute('INSERT INTO messages (liver, sender, content) VALUES (?, ?, ?)', (username, pseudo_sender, content))
-            conn.commit()
-            flash('疑似メッセージを投稿しました！')
-
-    messages = conn.execute('SELECT * FROM messages WHERE liver = ? ORDER BY id DESC', (username,)).fetchall()
+    # 1. これまでメッセージを送ってくれたリスナーを重複なしで取得（リスト作成）
+    listeners = conn.execute(
+        'SELECT DISTINCT sender FROM messages WHERE liver = ? ORDER BY sender ASC', 
+        (username,)
+    ).fetchall()
+    
+    # 2. 全メッセージ取得
+    messages = conn.execute(
+        'SELECT * FROM messages WHERE liver = ? ORDER BY id DESC', 
+        (username,)
+    ).fetchall()
+    
     conn.close()
     share_url = f"{request.host_url}{username}/welcome.com"
     
-    return render_template('admin.html', username=username, share_url=share_url, messages=messages)
+    return render_template('admin.html', username=username, share_url=share_url, messages=messages, listeners=listeners)
 
+# 新規登録
 @app.route('/signup', methods=['GET', 'POST'])
 def signup():
     if request.method == 'POST':
         user, pwd = request.form.get('username'), request.form.get('password')
         if user and pwd:
             hashed = generate_password_hash(pwd)
-            conn = get_db_conn()
-            try:
-                conn.execute('INSERT INTO admins (username, password) VALUES (?, ?)', (user, hashed))
-                conn.commit()
-                return redirect(url_for('login'))
-            except: flash('登録済み')
-            finally: conn.close()
+            with get_db_conn() as conn:
+                try:
+                    conn.execute('INSERT INTO admins (username, password) VALUES (?, ?)', (user, hashed))
+                    conn.commit()
+                    return redirect(url_for('login'))
+                except: flash('登録済み')
     return render_template('signup.html')
 
 @app.route('/logout')
