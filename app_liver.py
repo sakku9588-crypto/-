@@ -1,16 +1,11 @@
 import os
 import sqlite3
-import logging
 from flask import Flask, render_template, request, redirect, url_for, session, flash
 from werkzeug.security import generate_password_hash, check_password_hash
 
-# ログ設定
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
-
 app = Flask(__name__)
-# 重要：セッションを維持するためにキーを固定します
-app.secret_key = 'poibox_ultimate_stable_v100'
+# セッションを確実に維持・破棄するための固定キー
+app.secret_key = 'poibox_absolute_fix_key_999'
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.path.join(BASE_DIR, 'test_pts.db')
@@ -21,6 +16,7 @@ def get_db_conn():
     conn.execute('PRAGMA journal_mode=WAL;') 
     return conn
 
+# 起動時にDBを最新状態に強制アップデート
 def init_db():
     conn = get_db_conn()
     conn.execute('CREATE TABLE IF NOT EXISTS admins (id INTEGER PRIMARY KEY AUTOINCREMENT, username TEXT UNIQUE, password TEXT)')
@@ -34,7 +30,7 @@ def init_db():
 
 init_db()
 
-# --- 1. トップページ (検索) ---
+# --- 1. トップページ ---
 @app.route('/', methods=['GET', 'POST'])
 def index():
     if request.method == 'POST':
@@ -43,17 +39,21 @@ def index():
             return redirect(url_for('welcome', liver_name=liver_name))
     return render_template('index.html')
 
-# --- 2. 通帳マイページ (ログイン・データ表示) ---
+# --- 2. 通帳ページ (ログイン & 表示) ---
 @app.route('/<liver_name>/welcome', methods=['GET', 'POST'])
 def welcome(liver_name):
+    # 退出処理（通帳を閉じる）の実装
+    if request.args.get('action') == 'close':
+        session.pop(f'user_{liver_name}', None)
+        return redirect(url_for('index'))
+
     lname = None
     if request.method == 'POST':
         lname = request.form.get('listener_name')
         if lname:
-            session[f'active_user_{liver_name}'] = lname # セッションに保存
+            session[f'user_{liver_name}'] = lname # セッション保存
     else:
-        # 掲示板から戻った際などにセッションから名前を復元
-        lname = session.get(f'active_user_{liver_name}')
+        lname = session.get(f'user_{liver_name}') # 復元
 
     listener_data = None
     if lname:
@@ -61,29 +61,23 @@ def welcome(liver_name):
         listener_data = conn.execute('SELECT * FROM listeners WHERE liver_owner = ? AND name = ?', 
                                      (liver_name, lname)).fetchone()
         conn.close()
-        if not listener_data and request.method == 'POST':
-            flash(f'「{lname}」さんは未登録です。')
 
     return render_template('welcome.html', liver_name=liver_name, listener=listener_data)
 
-# --- 3. 掲示板 (バグ修正版) ---
+# --- 3. 掲示板 (修正版：contentカラムへの保存を徹底) ---
 @app.route('/<liver_name>/board.com', methods=['GET', 'POST'])
 def board(liver_name):
-    # ログイン中の名前を取得
-    logged_in_name = session.get(f'active_user_{liver_name}')
+    logged_in_name = session.get(f'user_{liver_name}')
     conn = get_db_conn()
     
     if request.method == 'POST':
         action = request.form.get('action')
-        # ログイン済みならその名前、そうでなければフォームの sender (HTMLにある場合)
         sender = logged_in_name if logged_in_name else request.form.get('sender', '').strip()
 
         # 登録者チェック
-        listener = conn.execute('SELECT * FROM listeners WHERE liver_owner = ? AND name = ?', 
-                                (liver_name, sender)).fetchone()
-        
+        listener = conn.execute('SELECT * FROM listeners WHERE liver_owner = ? AND name = ?', (liver_name, sender)).fetchone()
         if not listener:
-            flash('通帳でログインしてから書き込んでね！')
+            flash('通帳でログインしてください。')
             conn.close()
             return redirect(url_for('board', liver_name=liver_name))
 
@@ -91,35 +85,31 @@ def board(liver_name):
             msg_id = request.form.get('message_id')
             conn.execute('UPDATE messages SET likes = likes + 1 WHERE id = ?', (msg_id,))
         else:
-            # HTML側の <input name="message"> から取得
-            content = request.form.get('message')
+            # HTML側の name="message" を受け取る
+            text_content = request.form.get('message')
             parent_id = request.form.get('parent_id')
-            if content:
+            if text_content:
                 conn.execute('INSERT INTO messages (liver, sender, content, parent_id) VALUES (?, ?, ?, ?)', 
-                             (liver_name, sender, content, parent_id if parent_id else None))
+                             (liver_name, sender, text_content, parent_id if parent_id else None))
         
         conn.commit()
         conn.close()
         return redirect(url_for('board', liver_name=liver_name))
 
-    # 投稿一覧
+    # 表示処理
     messages = conn.execute('SELECT * FROM messages WHERE liver = ? ORDER BY id ASC', (liver_name,)).fetchall()
     conn.close()
     
     main_posts = [m for m in messages if m['parent_id'] is None]
     replies = [m for m in messages if m['parent_id'] is not None]
     
-    return render_template('board.html', 
-                           liver_name=liver_name, 
-                           main_posts=main_posts, 
-                           replies=replies, 
-                           logged_in_name=logged_in_name)
+    return render_template('board.html', liver_name=liver_name, main_posts=main_posts, replies=replies, logged_in_name=logged_in_name)
 
-# --- 4. ログアウト (close対応) ---
+# --- 4. ログアウト ---
 @app.route('/logout')
 def logout():
-    session.clear() # 全てのセッションを削除
-    return redirect(url_for('index')) # 完全にトップに戻す
+    session.clear()
+    return redirect(url_for('index'))
 
 # --- 管理画面系 ---
 @app.route('/login', methods=['GET', 'POST'])
@@ -130,14 +120,14 @@ def login():
         admin = conn.execute('SELECT * FROM admins WHERE username = ?', (user,)).fetchone()
         conn.close()
         if admin and check_password_hash(admin['password'], pwd):
-            session['admin_user'] = user
+            session['admin'] = user
             return redirect(url_for('admin'))
     return render_template('login.html')
 
 @app.route('/admin', methods=['GET', 'POST'])
 def admin():
-    if 'admin_user' not in session: return redirect(url_for('login'))
-    username = session['admin_user']
+    if 'admin' not in session: return redirect(url_for('login'))
+    username = session['admin']
     conn = get_db_conn()
     if request.method == 'POST':
         action = request.form.get('action')
@@ -149,10 +139,9 @@ def admin():
             except: pass
         elif action == 'update_points':
             l_id, diff = request.form.get('listener_id'), int(request.form.get('diff', 0))
+            conn.execute('UPDATE listeners SET points = points + ? WHERE id = ?', (diff, l_id))
             if diff > 0:
-                conn.execute('UPDATE listeners SET points = points + ?, total_points = total_points + ? WHERE id = ?', (diff, diff, l_id))
-            else:
-                conn.execute('UPDATE listeners SET points = points + ? WHERE id = ?', (diff, l_id))
+                conn.execute('UPDATE listeners SET total_points = total_points + ? WHERE id = ?', (diff, l_id))
             conn.commit()
     listeners = conn.execute('SELECT * FROM listeners WHERE liver_owner = ? ORDER BY name ASC', (username,)).fetchall()
     conn.close()
