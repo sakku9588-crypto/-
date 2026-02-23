@@ -9,7 +9,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
-app.secret_key = 'poibox_v22_dynamic_url'
+app.secret_key = 'poibox_v23_test_post'
 
 # --- データベース設定 ---
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -33,15 +33,10 @@ def init_db():
 
 init_db()
 
-# ==========================================
-# ルート設定
-# ==========================================
-
 @app.route('/')
 def index():
     return render_template('index.html')
 
-# リスナーページ (URL: /ユーザー名/welcome.com)
 @app.route('/<username>/welcome.com', methods=['GET', 'POST'])
 def welcome(username):
     conn = get_db_conn()
@@ -49,19 +44,12 @@ def welcome(username):
         sender = request.form.get('sender', '匿名リスナー')
         content = request.form.get('content')
         if content:
-            try:
-                conn.execute('INSERT INTO messages (liver, sender, content) VALUES (?, ?, ?)', 
-                             (username, sender, content))
-                conn.commit()
-                flash('メッセージを送信しました！')
-            except Exception as e:
-                logger.error(f"POST ERROR: {e}")
-
+            conn.execute('INSERT INTO messages (liver, sender, content) VALUES (?, ?, ?)', (username, sender, content))
+            conn.commit()
     messages = conn.execute('SELECT * FROM messages WHERE liver = ? ORDER BY id DESC LIMIT 10', (username,)).fetchall()
     conn.close()
     return render_template('welcome.html', liver_name=username, messages=messages)
 
-# ログイン
 @app.route('/login', methods=['GET', 'POST'])
 def login():
     if request.method == 'POST':
@@ -70,37 +58,40 @@ def login():
         conn = get_db_conn()
         admin_data = conn.execute('SELECT * FROM admins WHERE username = ?', (user,)).fetchone()
         conn.close()
-        
         if admin_data and check_password_hash(admin_data['password'], pwd):
             session['user_id'] = user
             return redirect(url_for('admin'))
-        else:
-            flash('名前またはパスワードが違います')
+        flash('ログイン失敗')
     return render_template('login.html')
 
-# 管理画面
-@app.route('/admin')
+# --- 【修正箇所】管理画面で疑似投稿ができるようにする ---
+@app.route('/admin', methods=['GET', 'POST'])
 def admin():
     if 'user_id' not in session:
         return redirect(url_for('login'))
     
     username = session['user_id']
-    # share_url も dynamic に生成
-    share_url = f"{request.host_url}{username}/welcome.com"
-    
     conn = get_db_conn()
+    
+    # 疑似リスナーとしての投稿処理
+    if request.method == 'POST':
+        pseudo_sender = request.form.get('pseudo_sender', '疑似リスナー')
+        content = request.form.get('content')
+        if content:
+            conn.execute('INSERT INTO messages (liver, sender, content) VALUES (?, ?, ?)', (username, pseudo_sender, content))
+            conn.commit()
+            flash('疑似メッセージを投稿しました！')
+
     messages = conn.execute('SELECT * FROM messages WHERE liver = ? ORDER BY id DESC', (username,)).fetchall()
     conn.close()
+    share_url = f"{request.host_url}{username}/welcome.com"
     
-    # HTML側で {{ username }} が使えるように渡す
     return render_template('admin.html', username=username, share_url=share_url, messages=messages)
 
-# 新規登録
 @app.route('/signup', methods=['GET', 'POST'])
 def signup():
     if request.method == 'POST':
-        user = request.form.get('username')
-        pwd = request.form.get('password')
+        user, pwd = request.form.get('username'), request.form.get('password')
         if user and pwd:
             hashed = generate_password_hash(pwd)
             conn = get_db_conn()
@@ -108,10 +99,8 @@ def signup():
                 conn.execute('INSERT INTO admins (username, password) VALUES (?, ?)', (user, hashed))
                 conn.commit()
                 return redirect(url_for('login'))
-            except:
-                flash('その名前は登録済みです')
-            finally:
-                conn.close()
+            except: flash('登録済み')
+            finally: conn.close()
     return render_template('signup.html')
 
 @app.route('/logout')
