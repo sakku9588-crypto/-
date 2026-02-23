@@ -2,11 +2,9 @@ import sqlite3
 import os
 from flask import Flask, render_template, request, session, redirect, url_for
 
-# Renderなどのサーバー環境でも正しく動くための設定
+# --- Render環境で動くための設定 ---
 current_dir = os.path.dirname(os.path.abspath(__file__))
-# templatesフォルダの場所を明示的に指定
 template_dir = os.path.join(current_dir, 'templates')
-# データベースファイルの保存場所を指定
 db_path = os.path.join(current_dir, 'sakku01_pts.db')
 
 app = Flask(__name__, template_folder=template_dir)
@@ -19,7 +17,6 @@ def get_db_connection():
 
 def init_db():
     conn = get_db_connection()
-    # テーブル作成
     conn.execute('CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY, handle TEXT UNIQUE, points INTEGER DEFAULT 0, total_points INTEGER DEFAULT 0, is_verified BOOLEAN DEFAULT 0)')
     conn.execute('CREATE TABLE IF NOT EXISTS board (id INTEGER PRIMARY KEY, handle TEXT, message TEXT, parent_id INTEGER, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)')
     conn.execute('CREATE TABLE IF NOT EXISTS passbook (id INTEGER PRIMARY KEY, handle TEXT, amount INTEGER, reason TEXT, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)')
@@ -29,7 +26,6 @@ def init_db():
 
 @app.route('/')
 def index():
-    # welcome.html が templates フォルダ内にある必要があります
     return render_template('welcome.html')
 
 @app.route('/login', methods=['POST'])
@@ -102,11 +98,9 @@ def like_post(post_id):
     conn.close()
     return redirect(url_for('board'))
 
-# --- 大事な追加設定 ---
-# 起動時にデータベースを初期化するように変更
+# --- ここでデータベースを強制的に作ります ---
 with app.app_context():
     init_db()
 
 if __name__ == '__main__':
-    # ローカル（PC）実行用
     app.run(debug=True, host='0.0.0.0', port=5000)
