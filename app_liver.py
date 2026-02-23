@@ -4,8 +4,8 @@ from flask import Flask, render_template, request, redirect, url_for, session, f
 from werkzeug.security import generate_password_hash, check_password_hash
 
 app = Flask(__name__)
-# セッションの安定性のための秘密鍵
-app.secret_key = 'poibox_v54_stable_fix'
+# セッションを確実に維持・破棄するための鍵
+app.secret_key = 'poibox_v100_stable_system'
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.path.join(BASE_DIR, 'test_pts.db')
@@ -29,25 +29,30 @@ def init_db():
 
 init_db()
 
-# --- 1. インデックス ---
+# --- 1. トップページ ---
 @app.route('/', methods=['GET', 'POST'])
 def index():
     if request.method == 'POST':
         liver_name = request.form.get('liver_name')
         if liver_name:
+            # セッションにライバー名を保存（URLが変わっても追跡するため）
+            session['current_liver'] = liver_name
             return redirect(url_for('welcome', liver_name=liver_name))
     return render_template('index.html')
 
-# --- 2. 通帳ページ (mypage.html のデザインを適用) ---
+# --- 2. 通帳ページ (mypage.html) ---
+# ※関数名を welcome にし、HTML内のURL生成に対応
 @app.route('/<liver_name>/welcome', methods=['GET', 'POST'])
 def welcome(liver_name):
+    session['current_liver'] = liver_name
     lname = None
+    
     if request.method == 'POST':
         lname = request.form.get('listener_name')
         if lname:
-            session[f'active_user_{liver_name}'] = lname
+            session[f'user_{liver_name}'] = lname # 名前を保存
     else:
-        lname = session.get(f'active_user_{liver_name}')
+        lname = session.get(f'user_{liver_name}') # 名前を復元
 
     listener_data = None
     if lname:
@@ -56,49 +61,48 @@ def welcome(liver_name):
                                      (liver_name, lname)).fetchone()
         conn.close()
 
-    # mypage.html に必要な変数を渡す
     if listener_data:
+        # mypage.html で使われている変数名に完全に一致させて送る
         return render_template('mypage.html', 
                                liver_name=liver_name,
                                user_handle=listener_data['name'],
                                user_points=listener_data['points'],
                                total_points=listener_data['total_points'],
-                               is_verified=True, # デザイン上の公式マーク
-                               history=[]) # 履歴機能は今回空リスト
+                               is_verified=True,
+                               history=[]) # 履歴機能が必要な場合はここを拡張
     
-    # ログインしていない場合はログイン画面（welcome.html または index.html）へ
+    # 未ログイン時はログイン入力画面（既存のwelcome.html）を表示
     return render_template('welcome.html', liver_name=liver_name, listener=None)
 
-# --- 3. 掲示板 (board.html 連携) ---
-@app.route('/<liver_name>/board.com', methods=['GET', 'POST'])
-def board(liver_name):
-    logged_in_name = session.get(f'active_user_{liver_name}')
+# --- 3. 掲示板 (board.html) ---
+# ※関数名を board にし、HTML内の url_for('board') に対応
+@app.route('/board.com', methods=['GET', 'POST'])
+def board():
+    # URLからではなくセッションからライバー名を特定
+    liver_name = session.get('current_liver')
+    if not liver_name:
+        return redirect(url_for('index'))
+        
+    logged_in_name = session.get(f'user_{liver_name}')
     conn = get_db_conn()
     
     if request.method == 'POST':
         action = request.form.get('action')
         sender = logged_in_name if logged_in_name else request.form.get('sender', '').strip()
 
-        # 登録者チェック
-        listener = conn.execute('SELECT * FROM listeners WHERE liver_owner = ? AND name = ?', (liver_name, sender)).fetchone()
-        if not listener:
-            flash('通帳でログインしてください。')
-            conn.close()
-            return redirect(url_for('board', liver_name=liver_name))
-
         if action == 'like':
             msg_id = request.form.get('message_id')
             conn.execute('UPDATE messages SET likes = likes + 1 WHERE id = ?', (msg_id,))
         else:
-            # アップロードされた board.html の name="message" と一致させる
-            content = request.form.get('message')
+            # HTML側の name="message" を受け取り content カラムに保存
+            msg_text = request.form.get('message')
             parent_id = request.form.get('parent_id')
-            if content:
+            if msg_text:
                 conn.execute('INSERT INTO messages (liver, sender, content, parent_id) VALUES (?, ?, ?, ?)', 
-                             (liver_name, sender, content, parent_id if parent_id else None))
+                             (liver_name, sender, msg_text, parent_id if parent_id else None))
         conn.commit()
         conn.close()
-        return redirect(url_for('board', liver_name=liver_name))
+        return redirect(url_for('board'))
 
     messages = conn.execute('SELECT * FROM messages WHERE liver = ? ORDER BY id ASC', (liver_name,)).fetchall()
     conn.close()
@@ -112,13 +116,14 @@ def board(liver_name):
                            replies=replies, 
                            logged_in_name=logged_in_name)
 
-# --- 4. ログアウト (通帳を閉じる) ---
+# --- 4. ログアウト (退出する) ---
+# ※関数名を logout にし、HTML内の url_for('logout') に対応
 @app.route('/logout')
 def logout():
-    session.clear() # サーバー側の全記憶を消去
-    return redirect(url_for('index'))
+    session.clear() # 全てのログイン情報を破棄
+    return redirect(url_for('index')) # 入り口へ
 
-# --- 管理画面系 ---
+# --- 管理者機能 ---
 @app.route('/login', methods=['GET', 'POST'])
 def login():
     if request.method == 'POST':
@@ -153,21 +158,6 @@ def admin():
     listeners = conn.execute('SELECT * FROM listeners WHERE liver_owner = ? ORDER BY name ASC', (username,)).fetchall()
     conn.close()
     return render_template('admin.html', username=username, listeners=listeners)
-
-@app.route('/signup', methods=['GET', 'POST'])
-def signup():
-    if request.method == 'POST':
-        user, pwd = request.form.get('username'), request.form.get('password')
-        if user and pwd:
-            hashed = generate_password_hash(pwd)
-            conn = get_db_conn()
-            try:
-                conn.execute('INSERT INTO admins (username, password) VALUES (?, ?)', (user, hashed))
-                conn.commit()
-                return redirect(url_for('login'))
-            except: pass
-            finally: conn.close()
-    return render_template('signup.html')
 
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 5000))
