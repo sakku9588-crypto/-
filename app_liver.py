@@ -1,89 +1,56 @@
 import os
 import sqlite3
-import logging
-from flask import Flask, render_template, request, redirect, url_for, session, flash
-from werkzeug.security import generate_password_hash, check_password_hash
-
-# --- 設定：掲示板(app.py)側のRender URLをここに貼る ---
-BOARD_URL = "https://あなたの掲示板側のサイト名.onrender.com" 
-
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+from flask import Flask, render_template, request, redirect, url_for, session
 
 app = Flask(__name__)
-app.secret_key = 'poibox_admin_secret_key_net_v1'
+app.secret_key = 'poibox_secret_key_fixed_v1'
 
-# データベースの保存場所（Render対策で /tmp/ に保存）
-MASTER_DB = '/tmp/master_admin.db'
+# --- データベースの保存場所設定 (Render対策) ---
+# Renderでは /tmp/ フォルダ以外への書き込みが制限されるため変更
+def get_db_path(user_id):
+    return f'/tmp/sakku01_{user_id}.db'
 
-def get_master_conn():
-    conn = sqlite3.connect(MASTER_DB)
-    conn.row_factory = sqlite3.Row
-    return conn
-
-def init_master_db():
-    conn = get_master_conn()
+def init_db(user_id):
+    db_path = get_db_path(user_id)
+    conn = sqlite3.connect(db_path)
     conn.execute('''
-        CREATE TABLE IF NOT EXISTS admins (
+        CREATE TABLE IF NOT EXISTS messages (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            username TEXT UNIQUE,
-            password TEXT
+            content TEXT NOT NULL
         )
     ''')
     conn.commit()
     conn.close()
 
-@app.route('/')
+@app.route('/', methods=['GET', 'POST'])
 def index():
-    if 'user_id' not in session:
-        return redirect(url_for('login'))
+    # URLの末尾にある ?u=ユーザーID を取得
+    user_id = request.args.get('u', 'default')
     
-    username = session['user_id']
-    # 掲示板へのリンクを作成
-    share_url = f"{BOARD_URL}/?u={username}"
+    # データベースの準備
+    init_db(user_id)
     
-    return render_template('index.html', username=username, share_url=share_url)
-
-@app.route('/login', methods=['GET', 'POST'])
-def login():
+    db_path = get_db_path(user_id)
+    
     if request.method == 'POST':
-        user, pwd = request.form.get('username'), request.form.get('password')
-        conn = get_master_conn()
-        admin = conn.execute('SELECT * FROM admins WHERE username = ?', (user,)).fetchone()
-        conn.close()
-        if admin and check_password_hash(admin['password'], pwd):
-            session['user_id'] = user
-            return redirect(url_for('index'))
-        else:
-            flash('ユーザー名またはパスワードが違います', 'danger')
-    return render_template('login.html')
+        content = request.form.get('content')
+        if content:
+            conn = sqlite3.connect(db_path)
+            conn.execute('INSERT INTO messages (content) VALUES (?)', (content,))
+            conn.commit()
+            conn.close()
+        return redirect(url_for('index', u=user_id))
 
-@app.route('/signup', methods=['GET', 'POST'])
-def signup():
-    if request.method == 'POST':
-        user, pwd = request.form.get('username'), request.form.get('password')
-        if user and pwd:
-            hashed = generate_password_hash(pwd)
-            conn = get_master_conn()
-            try:
-                conn.execute('INSERT INTO admins (username, password) VALUES (?, ?)', (user, hashed))
-                conn.commit()
-                return redirect(url_for('login'))
-            except:
-                flash('そのIDは既に使用されています', 'danger')
-            finally:
-                conn.close()
-    return render_template('signup.html')
+    # メッセージの読み込み
+    conn = sqlite3.connect(db_path)
+    messages = conn.execute('SELECT content FROM messages ORDER BY id DESC').fetchall()
+    conn.close()
+    
+    return render_template('index.html', messages=messages, user_id=user_id)
 
-@app.route('/logout')
-def logout():
-    session.clear()
-    return redirect(url_for('login'))
-
-# サーバー起動時にDB初期化
-with app.app_context():
-    init_master_db()
-
+# --- ここが重要：RenderのPort scan timeout対策 ---
 if __name__ == '__main__':
-    # ローカルテスト用
-    app.run(debug=True, port=8000)
+    # Renderは環境変数 PORT で指定されたポートで待ち受ける必要がある
+    port = int(os.environ.get("PORT", 5000))
+    # host="0.0.0.0" にしないと外部（ネット）からアクセスできない
+    app.run(host="0.0.0.0", port=port)
