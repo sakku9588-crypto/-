@@ -4,57 +4,54 @@ import logging
 from flask import Flask, render_template, request, redirect, url_for, session, flash
 from werkzeug.security import generate_password_hash, check_password_hash
 
-logging.basicConfig(level=logging.INFO)
+# ログを最小限にして処理を軽くする
+logging.basicConfig(level=logging.WARNING)
 logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
-app.secret_key = 'poibox_v28_step_flow'
+app.secret_key = 'poibox_v29_fast_stable'
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.path.join(BASE_DIR, 'test_pts.db')
 
+# --- データベース接続の最適化 ---
 def get_db_conn():
-    conn = sqlite3.connect(DB_PATH, check_same_thread=False, timeout=10)
+    # timeoutを長めに設定し、書き込み待ちによるフリーズを防ぐ
+    conn = sqlite3.connect(DB_PATH, check_same_thread=False, timeout=30)
     conn.row_factory = sqlite3.Row
+    # 高速化のための設定
+    conn.execute('PRAGMA journal_mode=WAL;') 
     return conn
 
 def init_db():
-    conn = get_db_conn()
-    try:
-        conn.execute('CREATE TABLE IF NOT EXISTS admins (id INTEGER PRIMARY KEY AUTOINCREMENT, username TEXT UNIQUE NOT NULL, password TEXT NOT NULL)')
-        conn.execute('CREATE TABLE IF NOT EXISTS listeners (id INTEGER PRIMARY KEY AUTOINCREMENT, liver_owner TEXT NOT NULL, name TEXT NOT NULL, points INTEGER DEFAULT 0, UNIQUE(liver_owner, name))')
-        conn.execute('CREATE TABLE IF NOT EXISTS messages (id INTEGER PRIMARY KEY AUTOINCREMENT, liver TEXT NOT NULL, sender TEXT, content TEXT NOT NULL, timestamp DATETIME DEFAULT CURRENT_TIMESTAMP)')
+    with get_db_conn() as conn:
+        conn.execute('CREATE TABLE IF NOT EXISTS admins (id INTEGER PRIMARY KEY AUTOINCREMENT, username TEXT UNIQUE, password TEXT)')
+        conn.execute('CREATE TABLE IF NOT EXISTS listeners (id INTEGER PRIMARY KEY AUTOINCREMENT, liver_owner TEXT, name TEXT, points INTEGER DEFAULT 0, UNIQUE(liver_owner, name))')
+        conn.execute('CREATE TABLE IF NOT EXISTS messages (id INTEGER PRIMARY KEY AUTOINCREMENT, liver TEXT, sender TEXT, content TEXT, timestamp DATETIME DEFAULT CURRENT_TIMESTAMP)')
         conn.commit()
-    except Exception as e:
-        logger.error(f"DB INIT ERROR: {e}")
-    finally:
-        conn.close()
 
 init_db()
+
+# --- ルート設定 ---
 
 @app.route('/')
 def index():
     return render_template('index.html')
 
-# --- ① リスナー用 welcomeページ (入力＆通帳表示) ---
+# ① リスナー用 welcome (入力＆通帳)
 @app.route('/<liver_name>/welcome', methods=['GET', 'POST'])
 def welcome(liver_name):
     listener_data = None
-    listener_name = None
-
     if request.method == 'POST':
-        listener_name = request.form.get('listener_name')
-        conn = get_db_conn()
-        listener_data = conn.execute('SELECT * FROM listeners WHERE liver_owner = ? AND name = ?', 
-                                    (liver_name, listener_name)).fetchone()
-        conn.close()
+        lname = request.form.get('listener_name')
+        with get_db_conn() as conn:
+            listener_data = conn.execute('SELECT * FROM listeners WHERE liver_owner = ? AND name = ?', 
+                                        (liver_name, lname)).fetchone()
         if not listener_data:
-            flash(f'「{listener_name}」さんは登録されていません。')
+            flash(f'「{lname}」さんは未登録です。')
+    return render_template('welcome.html', liver_name=liver_name, listener=listener_data)
 
-    # POSTでデータがあれば通帳表示、なければ入力画面を表示（どちらもwelcome.html内で処理）
-    return render_template('welcome.html', liver_name=liver_name, listener=listener_data, input_name=listener_name)
-
-# --- ② 掲示板ページ ---
+# ② 掲示板
 @app.route('/<liver_name>/board.com', methods=['GET', 'POST'])
 def board(liver_name):
     conn = get_db_conn()
@@ -65,18 +62,18 @@ def board(liver_name):
             conn.execute('INSERT INTO messages (liver, sender, content) VALUES (?, ?, ?)', (liver_name, sender, content))
             conn.commit()
     
-    messages = conn.execute('SELECT * FROM messages WHERE liver = ? ORDER BY id DESC LIMIT 20', (liver_name,)).fetchall()
+    # 取得件数を絞って高速化
+    messages = conn.execute('SELECT * FROM messages WHERE liver = ? ORDER BY id DESC LIMIT 15', (liver_name,)).fetchall()
     conn.close()
     return render_template('board.html', liver_name=liver_name, messages=messages)
 
-# --- ライバーログイン・管理画面 ---
+# --- ライバーログイン・管理 ---
 @app.route('/login', methods=['GET', 'POST'])
 def login():
     if request.method == 'POST':
         user, pwd = request.form.get('username'), request.form.get('password')
-        conn = get_db_conn()
-        admin = conn.execute('SELECT * FROM admins WHERE username = ?', (user,)).fetchone()
-        conn.close()
+        with get_db_conn() as conn:
+            admin = conn.execute('SELECT * FROM admins WHERE username = ?', (user,)).fetchone()
         if admin and check_password_hash(admin['password'], pwd):
             session['user_id'] = user
             return redirect(url_for('admin'))
@@ -100,6 +97,7 @@ def admin():
             l_id, diff = request.form.get('listener_id'), int(request.form.get('diff', 0))
             conn.execute('UPDATE listeners SET points = points + ? WHERE id = ? AND liver_owner = ?', (diff, l_id, username))
             conn.commit()
+    
     listeners = conn.execute('SELECT * FROM listeners WHERE liver_owner = ? ORDER BY name ASC', (username,)).fetchall()
     conn.close()
     return render_template('admin.html', username=username, listeners=listeners)
@@ -110,13 +108,12 @@ def signup():
         user, pwd = request.form.get('username'), request.form.get('password')
         if user and pwd:
             hashed = generate_password_hash(pwd)
-            conn = get_db_conn()
-            try:
-                conn.execute('INSERT INTO admins (username, password) VALUES (?, ?)', (user, hashed))
-                conn.commit()
-                return redirect(url_for('login'))
-            except: flash('登録済み')
-            finally: conn.close()
+            with get_db_conn() as conn:
+                try:
+                    conn.execute('INSERT INTO admins (username, password) VALUES (?, ?)', (user, hashed))
+                    conn.commit()
+                    return redirect(url_for('login'))
+                except: flash('登録済み')
     return render_template('signup.html')
 
 @app.route('/logout')
