@@ -4,12 +4,12 @@ import logging
 from flask import Flask, render_template, request, redirect, url_for, session, flash
 from werkzeug.security import generate_password_hash, check_password_hash
 
+# ログ設定
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
-# セッションを維持するためにシークレットキーを固定
-app.secret_key = 'poibox_session_secure_key_v39'
+app.secret_key = 'poibox_v40_fix_404'
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.path.join(BASE_DIR, 'test_pts.db')
@@ -33,7 +33,14 @@ def init_db():
 
 init_db()
 
-# --- 通帳マイページ (名前をセッションに保存) ---
+# --- ルート ---
+
+@app.route('/')
+def index():
+    # 誰のページでもないトップは管理者のログインへ誘導
+    return redirect(url_for('login'))
+
+# --- 通帳マイページ ---
 @app.route('/<liver_name>/welcome', methods=['GET', 'POST'])
 def welcome(liver_name):
     listener_data = None
@@ -42,14 +49,11 @@ def welcome(liver_name):
         conn = get_db_conn()
         listener_data = conn.execute('SELECT * FROM listeners WHERE liver_owner = ? AND name = ?', (liver_name, lname)).fetchone()
         conn.close()
-        
         if listener_data:
-            # セッションに「このライバーのリスナーである」という情報を保存
             session[f'active_listener_{liver_name}'] = lname
         else:
             flash(f'「{lname}」さんは未登録です。')
-            
-    # すでにセッションに名前がある場合は自動取得
+
     current_listener = session.get(f'active_listener_{liver_name}')
     if not listener_data and current_listener:
         conn = get_db_conn()
@@ -58,23 +62,20 @@ def welcome(liver_name):
 
     return render_template('welcome.html', liver_name=liver_name, listener=listener_data)
 
-# --- 掲示板 (セッションから名前を自動セット) ---
+# --- 掲示板 ---
 @app.route('/<liver_name>/board.com', methods=['GET', 'POST'])
 def board(liver_name):
-    # セッションから名前を取得
     logged_in_name = session.get(f'active_listener_{liver_name}')
-    
     conn = get_db_conn()
+    
     if request.method == 'POST':
         action = request.form.get('action')
-        # セッションに名前があればそれを使用、なければフォームから取得
         sender = logged_in_name if logged_in_name else request.form.get('sender', '').strip()
 
         # 登録者チェック
         listener = conn.execute('SELECT * FROM listeners WHERE liver_owner = ? AND name = ?', (liver_name, sender)).fetchone()
-        
         if not listener:
-            flash('通帳からログイン、または正しい登録名を入力してください。')
+            flash('登録されている名前で書き込んでね！')
             conn.close()
             return redirect(url_for('board', liver_name=liver_name))
 
@@ -87,21 +88,18 @@ def board(liver_name):
             if content:
                 conn.execute('INSERT INTO messages (liver, sender, content, parent_id) VALUES (?, ?, ?, ?)', 
                              (liver_name, sender, content, parent_id if parent_id else None))
-        
         conn.commit()
         conn.close()
         return redirect(url_for('board', liver_name=liver_name))
 
     messages = conn.execute('SELECT * FROM messages WHERE liver = ? ORDER BY id ASC', (liver_name,)).fetchall()
     conn.close()
-    
     main_posts = [m for m in messages if m['parent_id'] is None]
     replies = [m for m in messages if m['parent_id'] is not None]
     
-    # logged_in_name もテンプレートに渡す
     return render_template('board.html', liver_name=liver_name, main_posts=main_posts, replies=replies, logged_in_name=logged_in_name)
 
-# --- その他の基本ルート ---
+# --- 管理系 ---
 @app.route('/login', methods=['GET', 'POST'])
 def login():
     if request.method == 'POST':
