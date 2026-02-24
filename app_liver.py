@@ -8,7 +8,7 @@ from werkzeug.security import generate_password_hash, check_password_hash
 app = Flask(__name__)
 app.secret_key = 'your-secret-key-poibox'
 
-# --- DB接続プール (軽量化の要) ---
+# --- DB接続プール ---
 DATABASE_URL = os.environ.get('DATABASE_URL')
 db_pool = psycopg2.pool.SimpleConnectionPool(1, 10, dsn=DATABASE_URL, sslmode='require')
 
@@ -35,12 +35,30 @@ def init_db():
 
 init_db()
 
-# --- 1. ここを修正：まず index.html に飛ばす ---
 @app.route('/')
 def index():
-    # ログインしているかどうかを index.html に伝えて表示させる
-    is_logged_in = 'user_id' in session
-    return render_template('index.html', is_logged_in=is_logged_in)
+    return render_template('index.html', is_logged_in='user_id' in session)
+
+# --- Welcomeページ (リスナー用) ---
+@app.route('/<username>/<listener_name>/welcome.com')
+def welcome(username, listener_name):
+    conn = get_db_conn()
+    try:
+        with conn.cursor(cursor_factory=DictCursor) as cur:
+            # 配信者名とリスナー名からデータを検索
+            cur.execute("""
+                SELECT l.* FROM listeners l 
+                JOIN admins a ON l.admin_id = a.id 
+                WHERE a.username = %s AND l.name = %s
+            """, (username, listener_name))
+            user_data = cur.fetchone()
+    finally:
+        release_db_conn(conn)
+    
+    if user_data:
+        return render_template('welcome.html', user=user_data, admin_name=username)
+    else:
+        return "リスナーが見つかりませんでした", 404
 
 @app.route('/signup', methods=['GET', 'POST'])
 def signup():
@@ -90,7 +108,7 @@ def admin():
                 cur.execute("INSERT INTO listeners (name, points, total_points, admin_id) VALUES (%s, %s, %s, %s)", (name, pts, pts, uid))
                 conn.commit()
 
-            sql = "SELECT name AS handle, points, total_points FROM listeners WHERE admin_id = %s"
+            sql = "SELECT name AS handle, points, total_points, id FROM listeners WHERE admin_id = %s"
             params = [uid]
             if q:
                 sql += " AND name LIKE %s"
