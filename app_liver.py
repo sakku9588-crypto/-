@@ -8,8 +8,7 @@ from werkzeug.security import generate_password_hash, check_password_hash
 app = Flask(__name__)
 app.secret_key = 'your-secret-key-poibox'
 
-# --- データベース接続プールの設定 ---
-# 毎回接続を「切断→再接続」する無駄を省き、接続を使い回します
+# --- DB接続プール (軽量化の要) ---
 DATABASE_URL = os.environ.get('DATABASE_URL')
 db_pool = psycopg2.pool.SimpleConnectionPool(1, 10, dsn=DATABASE_URL, sslmode='require')
 
@@ -36,9 +35,12 @@ def init_db():
 
 init_db()
 
+# --- 1. ここを修正：まず index.html に飛ばす ---
 @app.route('/')
 def index():
-    return redirect(url_for('admin')) if 'user_id' in session else redirect(url_for('login'))
+    # ログインしているかどうかを index.html に伝えて表示させる
+    is_logged_in = 'user_id' in session
+    return render_template('index.html', is_logged_in=is_logged_in)
 
 @app.route('/signup', methods=['GET', 'POST'])
 def signup():
@@ -88,7 +90,6 @@ def admin():
                 cur.execute("INSERT INTO listeners (name, points, total_points, admin_id) VALUES (%s, %s, %s, %s)", (name, pts, pts, uid))
                 conn.commit()
 
-            # 高速化のため、表示件数を制限 (LIMIT 50)
             sql = "SELECT name AS handle, points, total_points FROM listeners WHERE admin_id = %s"
             params = [uid]
             if q:
@@ -98,7 +99,6 @@ def admin():
             cur.execute(sql, params)
             users = cur.fetchall()
 
-            # 履歴は最新5件に絞る
             cur.execute("SELECT handle, amount, reason, created_at FROM logs WHERE admin_id = %s ORDER BY created_at DESC LIMIT 5", (uid,))
             history = cur.fetchall()
     finally:
