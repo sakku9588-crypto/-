@@ -8,15 +8,19 @@ from werkzeug.security import generate_password_hash, check_password_hash
 from contextlib import contextmanager
 
 app = Flask(__name__)
-app.secret_key = os.environ.get('SECRET_KEY', 'your-secret-key-poibox')
+# セキュリティキーは環境変数から取得（なければデフォルト）
+app.secret_key = os.environ.get('SECRET_KEY', 'your-secret-key-poibox-2026')
 
 # --- DB接続設定 (postgres:// を postgresql:// に自動変換) ---
 DATABASE_URL = os.environ.get('DATABASE_URL')
 if DATABASE_URL and DATABASE_URL.startswith("postgres://"):
     DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
 
-# 接続プールの作成
-db_pool = SimpleConnectionPool(1, 10, dsn=DATABASE_URL, sslmode='require')
+# 接続プールの作成 (sslmode=require はクラウドDBで必須)
+try:
+    db_pool = SimpleConnectionPool(1, 10, dsn=DATABASE_URL, sslmode='require')
+except Exception as e:
+    print(f"DB接続エラー: {e}")
 
 @contextmanager
 def get_db():
@@ -29,18 +33,16 @@ def get_db():
 def init_db():
     with get_db() as conn:
         with conn.cursor() as cur:
-            # 管理者テーブル
             cur.execute('CREATE TABLE IF NOT EXISTS admins (id SERIAL PRIMARY KEY, username TEXT UNIQUE, password TEXT)')
-            # リスナーテーブル (累計ポイント管理)
             cur.execute('''CREATE TABLE IF NOT EXISTS listeners (
                 id SERIAL PRIMARY KEY, name TEXT, points INTEGER DEFAULT 0, 
                 total_points INTEGER DEFAULT 0, admin_id INTEGER, UNIQUE(name, admin_id))''')
-            # ログテーブル (「今日来た」記録もここ)
             cur.execute('''CREATE TABLE IF NOT EXISTS logs (
-                id SERIAL PRIMARY KEY, handle TEXT, amount INTEGER, reason TEXT, 
+                id SERIAL PRIMARY KEY, handle TEXT, amount INTEGER DEFAULT 0, reason TEXT, 
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, admin_id INTEGER)''')
         conn.commit()
 
+# アプリ起動時にテーブル作成
 init_db()
 
 # --- Routes ---
@@ -87,7 +89,7 @@ def admin():
     
     with get_db() as conn:
         with conn.cursor(cursor_factory=DictCursor) as cur:
-            # 検索処理
+            # 検索・リスナー一覧取得
             q = request.args.get('q', '')
             sql = "SELECT name AS handle, points, total_points FROM listeners WHERE admin_id = %s"
             params = [uid]
@@ -97,20 +99,20 @@ def admin():
             cur.execute(sql + " ORDER BY total_points DESC LIMIT 50", params)
             users = cur.fetchall()
 
-            # 最新ログ5件 (今日抽出された人も含む)
+            # 最新ログ取得（今日抽出された人も含む）
             cur.execute("SELECT handle, reason, created_at FROM logs WHERE admin_id = %s ORDER BY created_at DESC LIMIT 10", (uid,))
             history = cur.fetchall()
 
     return render_template('admin.html', username=session['username'], users=users, history=history, q=q)
 
-# --- 今日のリスナーをログから抽出して取り込む機能 ---
+# --- ポイぼっくすログ（txt）から取り込む機能 ---
 @app.route('/import_logs', methods=['POST'])
 def import_logs():
     if 'user_id' not in session: return redirect(url_for('login'))
     
     log_text = request.form.get('log_text', '').strip()
     if not log_text:
-        flash("データが空です", "warning")
+        flash("ログが空です", "warning")
         return redirect(url_for('admin'))
 
     lines = log_text.split('\n')
@@ -122,12 +124,12 @@ def import_logs():
             for line in lines:
                 name = line.strip()
                 if name:
-                    # 1. リスナーがいなければ新規作成
+                    # リスナー未登録なら登録
                     cur.execute("""
                         INSERT INTO listeners (name, admin_id) VALUES (%s, %s)
                         ON CONFLICT (name, admin_id) DO NOTHING
                     """, (name, uid))
-                    # 2. 「今日抽出」としてログに記録
+                    # 本日の抽出ログとして保存
                     cur.execute("""
                         INSERT INTO logs (handle, amount, reason, admin_id) 
                         VALUES (%s, 0, '本日抽出', %s)
@@ -135,7 +137,7 @@ def import_logs():
                     count += 1
         conn.commit()
     
-    flash(f"{count}名のリスナーを「今日抽出」として更新しました！", "success")
+    flash(f"{count}名のリスナーを「本日抽出」として記録しました！", "success")
     return redirect(url_for('admin'))
 
 @app.route('/<username>/<listener_name>/welcome.com')
@@ -151,7 +153,7 @@ def welcome(username, listener_name):
     
     if user_data:
         return render_template('welcome.html', user=user_data, admin_name=username)
-    return "リスナーが見ねかりませんでした", 404
+    return "リスナーが見つかりませんでした", 404
 
 @app.route('/logout')
 def logout():
@@ -159,4 +161,6 @@ def logout():
     return redirect(url_for('login'))
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 10000)))
+    # Renderのポート監視に対応
+    port = int(os.environ.get("PORT", 10000))
+    app.run(host='0.0.0.0', port=port)
