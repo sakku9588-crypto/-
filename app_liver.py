@@ -1,129 +1,126 @@
 import os
-import sqlite3
+import psycopg2
+from psycopg2.extras import DictCursor
 from flask import Flask, render_template, request, redirect, url_for, session, flash
 from werkzeug.security import generate_password_hash, check_password_hash
 
 app = Flask(__name__)
-app.secret_key = 'poibox_ultimate_stable_v9' # セッション管理用
+app.secret_key = 'poibox_postgres_sakuneko'
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-DB_PATH = os.path.join(BASE_DIR, 'test_pts.db')
+# Renderの管理画面で設定する環境変数 'DATABASE_URL' を取得
+DATABASE_URL = os.environ.get('DATABASE_URL')
 
 def get_db_conn():
-    conn = sqlite3.connect(DB_PATH, check_same_thread=False, timeout=30)
-    conn.row_factory = sqlite3.Row
-    conn.execute('PRAGMA journal_mode=WAL;')
+    # PostgreSQLへの接続（sslmode='require' がRenderでは必須）
+    conn = psycopg2.connect(DATABASE_URL, sslmode='require')
     return conn
 
-# データベース初期化
 def init_db():
     with get_db_conn() as conn:
-        # 1. 管理者
-        conn.execute('CREATE TABLE IF NOT EXISTS admins (id INTEGER PRIMARY KEY AUTOINCREMENT, username TEXT UNIQUE, password TEXT)')
-        # 2. リスナー（通帳）
-        conn.execute('CREATE TABLE IF NOT EXISTS listeners (id INTEGER PRIMARY KEY AUTOINCREMENT, liver_owner TEXT, name TEXT, points INTEGER DEFAULT 0, total_points INTEGER DEFAULT 0, UNIQUE(liver_owner, name))')
-        # 3. 掲示板 (HTMLの変数 handle, message, like_count に完全に合わせる)
-        conn.execute('''CREATE TABLE IF NOT EXISTS messages 
-                        (id INTEGER PRIMARY KEY AUTOINCREMENT, liver TEXT, handle TEXT, message TEXT, 
-                         parent_id INTEGER DEFAULT NULL, like_count INTEGER DEFAULT 0, 
-                         timestamp DATETIME DEFAULT CURRENT_TIMESTAMP)''')
-        conn.commit()
+        with conn.cursor() as cur:
+            # PostgreSQLの文法 (SERIAL) に微調整
+            cur.execute('CREATE TABLE IF NOT EXISTS admins (id SERIAL PRIMARY KEY, username TEXT UNIQUE, password TEXT)')
+            cur.execute('CREATE TABLE IF NOT EXISTS listeners (id SERIAL PRIMARY KEY, liver_owner TEXT, name TEXT, points INTEGER DEFAULT 0, total_points INTEGER DEFAULT 0, UNIQUE(liver_owner, name))')
+            cur.execute('''CREATE TABLE IF NOT EXISTS messages 
+                            (id SERIAL PRIMARY KEY, liver TEXT, handle TEXT, message TEXT, 
+                             parent_id INTEGER DEFAULT NULL, like_count INTEGER DEFAULT 0, 
+                             timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP)''')
+            conn.commit()
 
 init_db()
 
-# --- [共通] ログアウト (退出) ---
-@app.route('/logout')
-def logout():
-    session.clear()
-    return redirect(url_for('index'))
-
-# --- 1. トップページ ---
-@app.route('/', methods=['GET', 'POST'])
+@app.route('/')
 def index():
-    if request.method == 'POST':
-        liver_name = request.form.get('liver_name')
-        if liver_name: return redirect(url_for('welcome', liver_name=liver_name))
     return render_template('index.html')
 
-# --- 2. 通帳マイページ (mypage.html) ---
 @app.route('/<liver_name>/welcome', methods=['GET', 'POST'])
 def welcome(liver_name):
     if request.method == 'POST':
         lname = request.form.get('listener_name')
         if lname: session[f'user_{liver_name}'] = lname
-    
     lname = session.get(f'user_{liver_name}')
     listener_data = None
     if lname:
         with get_db_conn() as conn:
-            listener_data = conn.execute('SELECT * FROM listeners WHERE liver_owner = ? AND name = ?', (liver_name, lname)).fetchone()
-    
+            with conn.cursor(cursor_factory=DictCursor) as cur:
+                cur.execute('SELECT * FROM listeners WHERE liver_owner = %s AND name = %s', (liver_name, lname))
+                listener_data = cur.fetchone()
     if listener_data:
-        # mypage.html の変数名 handle, points, total_points に合わせる
-        return render_template('mypage.html', 
-                               liver_name=liver_name, 
-                               user_handle=listener_data['name'], 
-                               user_points=listener_data['points'], 
-                               total_points=listener_data['total_points'], 
-                               is_verified=True, 
-                               history=[])
+        return render_template('mypage.html', liver_name=liver_name, user_handle=listener_data['name'], user_points=listener_data['points'], total_points=listener_data['total_points'], is_verified=True, history=[])
     return render_template('welcome.html', liver_name=liver_name)
 
-# --- 3. 掲示板 (board.html) ---
 @app.route('/<liver_name>/board', methods=['GET', 'POST'])
 def board(liver_name):
     current_user = session.get(f'user_{liver_name}')
-    
     if request.method == 'POST':
         msg_text = request.form.get('message')
         parent_id = request.form.get('parent_id')
-        
-        if not current_user:
-            flash('通帳登録が必要です')
-            return redirect(url_for('board', liver_name=liver_name))
-
-        if msg_text:
+        if current_user and msg_text:
+            pid = int(parent_id) if parent_id and parent_id.isdigit() else None
             with get_db_conn() as conn:
-                conn.execute('INSERT INTO messages (liver, handle, message, parent_id) VALUES (?, ?, ?, ?)', 
-                             (liver_name, current_user, msg_text, int(parent_id) if parent_id and parent_id.isdigit() else None))
+                with conn.cursor() as cur:
+                    cur.execute('INSERT INTO messages (liver, handle, message, parent_id) VALUES (%s, %s, %s, %s)', 
+                                 (liver_name, current_user, msg_text, pid))
                 conn.commit()
         return redirect(url_for('board', liver_name=liver_name))
-
-    with get_db_conn() as conn:
-        # DBからこのライバーの投稿を全取得
-        all_msgs = conn.execute('SELECT * FROM messages WHERE liver = ? ORDER BY id ASC', (liver_name,)).fetchall()
     
-    # HTML側の {% for post in posts %} {% for reply in replies %} に渡す
+    with get_db_conn() as conn:
+        with conn.cursor(cursor_factory=DictCursor) as cur:
+            cur.execute('SELECT * FROM messages WHERE liver = %s ORDER BY id ASC', (liver_name,))
+            all_msgs = cur.fetchall()
+    
     posts = [m for m in all_msgs if m['parent_id'] is None]
     replies = [m for m in all_msgs if m['parent_id'] is not None]
-    
-    return render_template('board.html', 
-                           liver_name=liver_name, 
-                           posts=posts, 
-                           replies=replies, 
-                           current_user=current_user)
+    return render_template('board.html', liver_name=liver_name, posts=posts, replies=replies, current_user=current_user)
 
-# --- 4. いいね機能 ---
 @app.route('/like/<int:post_id>')
 def like_post(post_id):
     with get_db_conn() as conn:
-        msg = conn.execute('SELECT liver FROM messages WHERE id = ?', (post_id,)).fetchone()
-        if msg:
-            conn.execute('UPDATE messages SET like_count = like_count + 1 WHERE id = ?', (post_id,))
-            conn.commit()
-            return redirect(url_for('board', liver_name=msg['liver']))
+        with conn.cursor(cursor_factory=DictCursor) as cur:
+            cur.execute('SELECT liver FROM messages WHERE id = %s', (post_id,))
+            msg = cur.fetchone()
+            if msg:
+                cur.execute('UPDATE messages SET like_count = like_count + 1 WHERE id = %s', (post_id,))
+                conn.commit()
+                return redirect(url_for('board', liver_name=msg['liver']))
     return redirect(url_for('index'))
 
-# --- 5. 管理者ログイン・サインアップ ---
+# --- 管理画面 (PostgreSQL対応) ---
+@app.route('/admin', methods=['GET', 'POST'])
+def admin():
+    if 'admin_user' not in session: return redirect(url_for('login'))
+    username = session['admin_user']
+    with get_db_conn() as conn:
+        with conn.cursor(cursor_factory=DictCursor) as cur:
+            if request.method == 'POST':
+                action = request.form.get('action')
+                if action == 'create':
+                    name, pts = request.form.get('name'), int(request.form.get('points', 0))
+                    try:
+                        cur.execute('INSERT INTO listeners (liver_owner, name, points, total_points) VALUES (%s, %s, %s, %s)', (username, name, pts, pts))
+                        conn.commit()
+                    except: conn.rollback()
+                elif action == 'update_points':
+                    l_id, diff = request.form.get('listener_id'), int(request.form.get('diff', 0))
+                    cur.execute('UPDATE listeners SET points = points + %s WHERE id = %s', (diff, l_id))
+                    if diff > 0:
+                        cur.execute('UPDATE listeners SET total_points = total_points + %s WHERE id = %s', (diff, l_id))
+                    conn.commit()
+            cur.execute('SELECT * FROM listeners WHERE liver_owner = %s ORDER BY name ASC', (username,))
+            listeners = cur.fetchall()
+    return render_template('admin.html', username=username, listeners=listeners)
+
 @app.route('/login', methods=['GET', 'POST'])
 def login():
     if request.method == 'POST':
         user, pwd = request.form.get('username'), request.form.get('password')
         with get_db_conn() as conn:
-            admin = conn.execute('SELECT * FROM admins WHERE username = ?', (user,)).fetchone()
-            if admin and check_password_hash(admin['password'], pwd):
-                session['admin_user'] = user
-                return redirect(url_for('admin'))
+            with conn.cursor(cursor_factory=DictCursor) as cur:
+                cur.execute('SELECT * FROM admins WHERE username = %s', (user,))
+                admin = cur.fetchone()
+                if admin and check_password_hash(admin['password'], pwd):
+                    session['admin_user'] = user
+                    return redirect(url_for('admin'))
     return render_template('login.html')
 
 @app.route('/signup', methods=['GET', 'POST'])
@@ -133,33 +130,19 @@ def signup():
         if user and pwd:
             hashed = generate_password_hash(pwd)
             with get_db_conn() as conn:
-                try:
-                    conn.execute('INSERT INTO admins (username, password) VALUES (?, ?)', (user, hashed))
-                    conn.commit()
-                    return redirect(url_for('login'))
-                except: flash('エラーが発生しました')
+                with conn.cursor() as cur:
+                    try:
+                        cur.execute('INSERT INTO admins (username, password) VALUES (%s, %s)', (user, hashed))
+                        conn.commit()
+                        return redirect(url_for('login'))
+                    except: conn.rollback()
     return render_template('signup.html')
 
-# --- 6. 管理画面 (ポイント操作) ---
-@app.route('/admin', methods=['GET', 'POST'])
-def admin():
-    if 'admin_user' not in session: return redirect(url_for('login'))
-    username = session['admin_user']
-    with get_db_conn() as conn:
-        if request.method == 'POST':
-            action = request.form.get('action')
-            if action == 'create':
-                name, pts = request.form.get('name'), int(request.form.get('points', 0))
-                try: conn.execute('INSERT INTO listeners (liver_owner, name, points, total_points) VALUES (?, ?, ?, ?)', (username, name, pts, pts))
-                except: pass
-            elif action == 'update_points':
-                l_id, diff = request.form.get('listener_id'), int(request.form.get('diff', 0))
-                conn.execute('UPDATE listeners SET points = points + ? WHERE id = ?', (diff, l_id))
-                if diff > 0: conn.execute('UPDATE listeners SET total_points = total_points + ? WHERE id = ?', (diff, l_id))
-            conn.commit()
-        listeners = conn.execute('SELECT * FROM listeners WHERE liver_owner = ? ORDER BY name ASC', (username,)).fetchall()
-    return render_template('admin.html', username=username, listeners=listeners)
+@app.route('/logout')
+def logout():
+    session.clear()
+    return redirect(url_for('index'))
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
-    app.run(host="0.0.0.0", port=port, debug=True)
+    app.run(host="0.0.0.0", port=port)
